@@ -9,9 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
@@ -20,20 +18,14 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
-      # 공개 페이지에는 계획표(index.html)만 올린다 — 메모·체크리스트 md는 비공개 유지
+      # 공개 페이지에는 계획표(index.html)만 올린다 — 메모·체크리스트 md는 공개 안 함
       - run: |
           mkdir -p _site
           cp index.html _site/index.html
-      - uses: actions/upload-pages-artifact@v3
+          touch _site/.nojekyll
+      - uses: peaceiris/actions-gh-pages@v4
         with:
-          path: _site
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_site
