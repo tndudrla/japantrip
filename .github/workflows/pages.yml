@@ -6,6 +6,8 @@ on:
     paths:
       - index.html
       - japanese.html
+      - plan.pdf
+      - japanese.pdf
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -26,6 +28,7 @@ jobs:
           mkdir -p _site
           cp index.html _site/index.html
           cp japanese.html _site/japanese.html
+          cp plan.pdf japanese.pdf _site/
           touch _site/.nojekyll
       - uses: peaceiris/actions-gh-pages@v4
         with:

@@ -19,6 +19,7 @@
 ## 🌐 가족 공유 페이지 (GitHub Pages)
 - **여행 계획표:** https://tndudrla.github.io/japantrip/
 - **일본어 카드 전체:** https://tndudrla.github.io/japantrip/japanese.html
+- **오프라인용 PDF:** [계획표 PDF](https://tndudrla.github.io/japantrip/plan.pdf) · [일본어 카드 PDF](https://tndudrla.github.io/japantrip/japanese.pdf)
 
 ## 📂 파일 안내
 - **`명서가 짠 가족여행계획표.html`** — 인쇄용 최종본 (브라우저로 열고 Ctrl+P로 출력/PDF) · 일정별 일본어 카드 포함
