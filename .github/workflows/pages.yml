@@ -5,6 +5,7 @@ on:
     branches: [main, claude/japan-trip-6ihzfa]
     paths:
       - index.html
+      - japanese.html
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -20,10 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # 공개 페이지에는 계획표(index.html)만 올린다 — 메모·체크리스트 md는 공개 안 함
+      # 공개 페이지에는 계획표·일본어 카드만 올린다 — 메모·체크리스트 md는 공개 안 함
       - run: |
           mkdir -p _site
           cp index.html _site/index.html
+          cp japanese.html _site/japanese.html
           touch _site/.nojekyll
       - uses: peaceiris/actions-gh-pages@v4
         with:
