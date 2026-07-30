@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>배틀 레이스</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#111; font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif; }
+  #game { display:block; width:100vw; height:100vh; touch-action:none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+"use strict";
+
+// ===================== 기본 설정 =====================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+// ===================== 효과음 (WebAudio 비프) =====================
+let audioCtx = null;
+function beep(freq, dur, type, vol) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type || "square";
+    o.frequency.value = freq;
+    g.gain.value = vol || 0.06;
+    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + dur);
+  } catch (e) { /* 소리 실패는 무시 */ }
+}
+const sfx = {
+  kill:  () => { beep(880, 0.12); beep(440, 0.2, "sawtooth"); },
+  swing: () => beep(300, 0.06, "triangle", 0.04),
+  buy:   () => { beep(660, 0.08); beep(990, 0.12); },
+  hurt:  () => beep(150, 0.25, "sawtooth"),
+  win:   () => { beep(523, 0.15); setTimeout(() => beep(659, 0.15), 150); setTimeout(() => beep(784, 0.3), 300); },
+  go:    () => beep(784, 0.25),
+  count: () => beep(392, 0.15),
+};
+
+// ===================== 맵 테마 =====================
+const THEMES = [
+  { name: "푸른 초원",   sky1:"#7ec8f0", sky2:"#c9ecff", ground:"#5cb85c", groundDark:"#4a9d4a", deco:"tree" },
+  { name: "뜨거운 사막", sky1:"#ffca7a", sky2:"#ffe8c0", ground:"#e0c068", groundDark:"#c9a850", deco:"cactus" },
+  { name: "하얀 설원",   sky1:"#a8cef0", sky2:"#e8f4ff", ground:"#f0f6fb", groundDark:"#d5e4f0", deco:"snowman" },
+  { name: "용암 화산",   sky1:"#3a1f2b", sky2:"#7a3040", ground:"#5a4040", groundDark:"#463030", deco:"lava" },
+  { name: "밤의 도시",   sky1:"#101830", sky2:"#283a60", ground:"#555a66", groundDark:"#444852", deco:"building" },
+  { name: "벚꽃 언덕",   sky1:"#ffd6e8", sky2:"#fff0f6", ground:"#8bc98b", groundDark:"#74b274", deco:"sakura" },
+];
+
+// 레이스마다 바뀌는 캐릭터 의상/머리 색
+const OUTFITS = [
+  { shirt:"#e74c3c", pants:"#2c3e50", hairM:"#3b2b20", hairF:"#5b3a29" },
+  { shirt:"#3498db", pants:"#34495e", hairM:"#111111", hairF:"#c0392b" },
+  { shirt:"#27ae60", pants:"#7f8c8d", hairM:"#f1c40f", hairF:"#2c3e50" },
+  { shirt:"#9b59b6", pants:"#2c3e50", hairM:"#e67e22", hairF:"#f1c40f" },
+  { shirt:"#f39c12", pants:"#1a252f", hairM:"#7f8c8d", hairF:"#8e44ad" },
+  { shirt:"#1abc9c", pants:"#2c3e50", hairM:"#c0392b", hairF:"#16a085" },
+];
+
+const ENEMY_COLORS = ["#c0392b", "#8e44ad", "#d35400", "#16a085", "#7f8c8d", "#2980b9", "#b8860b"];
+const ENEMY_NAMES = ["빨강이", "보라돌이", "주황이", "청록이", "회색늑대", "파랑이", "황금이"];
+
+// ===================== 무기 =====================
+const WEAPONS = [
+  { name: "낡은 칼",    range: 55,  cooldown: 0.55, len: 26, color:"#b0b0b0", cost: 0 },
+  { name: "긴 칼",      range: 75,  cooldown: 0.48, len: 36, color:"#d8d8e8", cost: 20 },
+  { name: "창",         range: 100, cooldown: 0.42, len: 50, color:"#c8a878", cost: 20 },
+  { name: "대검",       range: 120, cooldown: 0.38, len: 58, color:"#88c8f0", cost: 20 },
+  { name: "전설의 검",  range: 145, cooldown: 0.30, len: 64, color:"#ffd700", cost: 20 },
+];
+const SPEED_COST = 10;
+const MAX_SPEED_LEVEL = 12;
+
+// ===================== 게임 상태 =====================
+const game = {
+  state: "select",       // select | countdown | race | result | gameover
+  gender: null,          // "M" | "F"
+  raceIndex: 0,
+  points: 0,
+  totalKills: 0,
+  speedLevel: 0,
+  weaponLevel: 0,
+  countdown: 3,
+  countdownTimer: 0,
+  raceLength: 0,
+  racers: [],
+  player: null,
+  camX: 0,
+  time: 0,
+  effects: [],
+  floatTexts: [],
+  finishOrder: [],
+  playerRank: 0,
+  killsThisRace: 0,
+  resultTimer: 0,
+  decos: [],
+};
+
+function theme() { return THEMES[game.raceIndex % THEMES.length]; }
+function outfit() { return OUTFITS[game.raceIndex % OUTFITS.length]; }
+
+// ===================== 트랙 좌표 =====================
+function trackTop() { return H * 0.42; }
+function trackBottom() { return H * 0.88; }
+
+// ===================== 레이스 준비 =====================
+function setupRace() {
+  const t = theme();
+  game.raceLength = 2600 + game.raceIndex * 500;
+  game.racers = [];
+  game.effects = [];
+  game.floatTexts = [];
+  game.finishOrder = [];
+  game.killsThisRace = 0;
+  game.camX = 0;
+
+  const laneCount = 6;
+  const laneH = (trackBottom() - trackTop()) / laneCount;
+  const enemyCount = Math.min(5 + Math.floor(game.raceIndex / 2), 7);
+
+  // 플레이어
+  game.player = {
+    isPlayer: true,
+    name: "나",
+    x: 60,
+    y: trackTop() + laneH * 2.5,
+    baseSpeed: 150,
+    alive: true,
+    finished: false,
+    hp: 3,
+    maxHp: 3,
+    invuln: 2,
+    attackTimer: 0,
+    attackCooldownLeft: 0,
+    runPhase: Math.random() * 10,
+    vy: 0,
+    boost: 0,
+  };
+  game.racers.push(game.player);
+
+  // AI 상대 — 레이스가 진행될수록 조금씩 빨라지고 공격적으로 변함
+  for (let i = 0; i < enemyCount; i++) {
+    game.racers.push({
+      isPlayer: false,
+      name: ENEMY_NAMES[i % ENEMY_NAMES.length],
+      color: ENEMY_COLORS[i % ENEMY_COLORS.length],
+      x: 40 + Math.random() * 40,
+      y: trackTop() + laneH * (0.5 + i % laneCount) + (Math.random() - 0.5) * 10,
+      baseSpeed: 135 + Math.random() * 30 + game.raceIndex * 6,
+      wobble: Math.random() * 10,
+      alive: true,
+      finished: false,
+      attackCooldownLeft: 1 + Math.random() * 2,
+      attackTimer: 0,
+      aggression: 0.4 + Math.random() * 0.4 + game.raceIndex * 0.05,
+      runPhase: Math.random() * 10,
+      targetY: 0,
+      retargetTimer: 0,
+    });
+  }
+
+  // 배경 장식 미리 배치
+  game.decos = [];
+  for (let x = 200; x < game.raceLength + 800; x += 180 + Math.random() * 220) {
+    game.decos.push({ x: x, y: Math.random(), size: 0.7 + Math.random() * 0.6 });
+  }
+
+  game.countdown = 3;
+  game.countdownTimer = 1;
+  game.state = "countdown";
+  sfx.count();
+}
+
+// ===================== 플레이어 속도/무기 =====================
+function playerSpeed() {
+  return game.player.baseSpeed * (1 + game.speedLevel * 0.09) + game.player.boost;
+}
+function weapon() { return WEAPONS[game.weaponLevel]; }
+
+function buySpeed() {
+  if (!game.player || game.state !== "race") return;
+  if (game.speedLevel >= MAX_SPEED_LEVEL) { addFloat("속도 최대!", game.player.x, game.player.y - 70, "#aaa"); return; }
+  if (game.points < SPEED_COST) { addFloat("포인트 부족!", game.player.x, game.player.y - 70, "#e74c3c"); return; }
+  game.points -= SPEED_COST;
+  game.speedLevel++;
+  sfx.buy();
+  addFloat("속도 UP!", game.player.x, game.player.y - 70, "#2ecc71");
+}
+function buyWeapon() {
+  if (!game.player || game.state !== "race") return;
+  if (game.weaponLevel >= WEAPONS.length - 1) { addFloat("최강 무기!", game.player.x, game.player.y - 70, "#aaa"); return; }
+  const cost = WEAPONS[game.weaponLevel + 1].cost;
+  if (game.points < cost) { addFloat("포인트 부족!", game.player.x, game.player.y - 70, "#e74c3c"); return; }
+  game.points -= cost;
+  game.weaponLevel++;
+  sfx.buy();
+  addFloat(weapon().name + " 획득!", game.player.x, game.player.y - 70, "#f1c40f");
+}
+
+// ===================== 이펙트 =====================
+function addPuff(x, y) {
+  for (let i = 0; i < 10; i++) {
+    game.effects.push({
+      x: x, y: y,
+      vx: (Math.random() - 0.5) * 160,
+      vy: (Math.random() - 0.7) * 160,
+      life: 0.5 + Math.random() * 0.3,
+      maxLife: 0.8,
+      r: 5 + Math.random() * 8,
+      color: Math.random() < 0.5 ? "#ffffff" : "#ffe08a",
+    });
+  }
+}
+function addFloat(text, x, y, color) {
+  game.floatTexts.push({ text: text, x: x, y: y, life: 1.2, color: color || "#fff" });
+}
+
+// ===================== 공격 =====================
+function playerAttack() {
+  const p = game.player;
+  if (!p || !p.alive || p.finished || game.state !== "race") return;
+  if (p.attackCooldownLeft > 0) return;
+  p.attackCooldownLeft = weapon().cooldown;
+  p.attackTimer = 0.22;
+  sfx.swing();
+  const w = weapon();
+  for (const r of game.racers) {
+    if (r.isPlayer || !r.alive || r.finished) continue;
+    const dx = r.x - p.x;
+    const dy = Math.abs(r.y - p.y);
+    if (dx > -25 && dx < w.range && dy < 46) {
+      killEnemy(r);
+    }
+  }
+}
+function killEnemy(r) {
+  r.alive = false;
+  game.points += 10;
+  game.totalKills++;
+  game.killsThisRace++;
+  addPuff(r.x, r.y - 25);
+  addFloat("+10P", r.x, r.y - 60, "#f1c40f");
+  sfx.kill();
+}
+
+// ===================== 캐릭터 그리기 =====================
+function drawRunner(r, screenX) {
+  const y = r.y;
+  const running = r.alive && !r.finished && game.state === "race";
+  const phase = r.runPhase + game.time * (running ? 13 : 2);
+  const legSwing = running ? Math.sin(phase) * 10 : 0;
+  const armSwing = running ? Math.sin(phase + Math.PI) * 8 : 0;
+  const bob = running ? Math.abs(Math.sin(phase)) * 3 : 0;
+
+  ctx.save();
+  ctx.translate(screenX, y - bob);
+
+  // 그림자
+  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  ctx.beginPath();
+  ctx.ellipse(0, bob + 2, 16, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  let shirt, pants, hair, skin = "#f5cba7", isFemale = false;
+  if (r.isPlayer) {
+    const o = outfit();
+    isFemale = game.gender === "F";
+    shirt = o.shirt; pants = o.pants;
+    hair = isFemale ? o.hairF : o.hairM;
+  } else {
+    shirt = r.color; pants = "#333";
+    hair = "#222";
+  }
+
+  // 다리
+  ctx.strokeStyle = pants;
+  ctx.lineWidth = 6;
+  ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(0, -22); ctx.lineTo(-4 + legSwing * 0.6, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, -22); ctx.lineTo(4 - legSwing * 0.6, 0); ctx.stroke();
+
+  // 몸통 (여자 캐릭터는 치마 느낌의 삼각형)
+  if (r.isPlayer && isFemale) {
+    ctx.fillStyle = shirt;
+    ctx.beginPath();
+    ctx.moveTo(-9, -42); ctx.lineTo(9, -42); ctx.lineTo(13, -18); ctx.lineTo(-13, -18);
+    ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillStyle = shirt;
+    ctx.fillRect(-9, -44, 18, 24);
+  }
+
+  // 뒤쪽 팔
+  ctx.strokeStyle = shirt;
+  ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.moveTo(-4, -40); ctx.lineTo(-8 - armSwing * 0.5, -26); ctx.stroke();
+
+  // 머리
+  ctx.fillStyle = skin;
+  ctx.beginPath(); ctx.arc(2, -54, 10, 0, Math.PI * 2); ctx.fill();
+
+  // 머리카락
+  ctx.fillStyle = hair;
+  if (r.isPlayer && isFemale) {
+    ctx.beginPath(); ctx.arc(1, -57, 10, Math.PI * 0.9, Math.PI * 2.05); ctx.fill();
+    // 포니테일
+    ctx.beginPath();
+    ctx.moveTo(-8, -58);
+    ctx.quadraticCurveTo(-20, -52 + Math.sin(phase) * 3, -16, -36);
+    ctx.quadraticCurveTo(-10, -44, -8, -50);
+    ctx.closePath(); ctx.fill();
+  } else {
+    ctx.beginPath(); ctx.arc(1, -58, 9, Math.PI, Math.PI * 2.1); ctx.fill();
+  }
+
+  // 눈 (달리는 방향)
+  ctx.fillStyle = "#222";
+  ctx.beginPath(); ctx.arc(7, -55, 1.6, 0, Math.PI * 2); ctx.fill();
+
+  // 앞쪽 팔 + 무기
+  const swinging = r.attackTimer > 0;
+  const swingT = swinging ? 1 - r.attackTimer / 0.22 : 0;
+  const armAngle = swinging ? (-1.6 + swingT * 2.4) : (0.5 + armSwing * 0.04);
+  ctx.save();
+  ctx.translate(4, -40);
+  ctx.rotate(armAngle);
+  ctx.strokeStyle = skin;
+  ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 15); ctx.stroke();
+
+  // 무기 (플레이어는 구매한 무기, AI는 기본 칼)
+  const wlen = r.isPlayer ? weapon().len : 24;
+  const wcol = r.isPlayer ? weapon().color : "#b0b0b0";
+  ctx.translate(0, 15);
+  ctx.rotate(-Math.PI / 2);
+  // 손잡이
+  ctx.strokeStyle = "#6b4a2b";
+  ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(8, 0); ctx.stroke();
+  // 날
+  ctx.strokeStyle = wcol;
+  ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(8 + wlen, 0); ctx.stroke();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(255,255,255,0.7)";
+  ctx.beginPath(); ctx.moveTo(10, -1); ctx.lineTo(6 + wlen, -1); ctx.stroke();
+  ctx.restore();
+
+  // 이름표
+  ctx.font = "11px sans-serif";
+  ctx.textAlign = "center";
+  if (r.isPlayer) {
+    ctx.fillStyle = "#2ecc71";
+    ctx.fillText("▼ 나", 0, -72);
+  } else {
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.fillText(r.name, 0, -70);
+  }
+
+  // 무적 깜빡임 표시
+  if (r.isPlayer && r.invuln > 0 && Math.floor(game.time * 12) % 2 === 0) {
+    ctx.globalCompositeOperation = "source-atop";
+  }
+  ctx.restore();
+}
+
+// ===================== 배경 그리기 =====================
+function drawBackground() {
+  const t = theme();
+  const grad = ctx.createLinearGradient(0, 0, 0, trackTop());
+  grad.addColorStop(0, t.sky1);
+  grad.addColorStop(1, t.sky2);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, trackTop());
+
+  // 트랙 (땅)
+  ctx.fillStyle = t.ground;
+  ctx.fillRect(0, trackTop(), W, trackBottom() - trackTop());
+  ctx.fillStyle = t.groundDark;
+  ctx.fillRect(0, trackBottom(), W, H - trackBottom());
+
+  // 트랙 위 차선 줄무늬 (스크롤 느낌)
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 3;
+  ctx.setLineDash([30, 40]);
+  for (let i = 1; i < 4; i++) {
+    const ly = trackTop() + (trackBottom() - trackTop()) * (i / 4);
+    ctx.beginPath();
+    ctx.moveTo(-((game.camX) % 70), ly);
+    ctx.lineTo(W, ly);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // 장식물
+  for (const d of game.decos) {
+    const sx = d.x - game.camX * 0.85;
+    if (sx < -80 || sx > W + 80) continue;
+    drawDeco(t.deco, sx, trackTop() - 6, d.size);
+  }
+
+  // 결승선
+  const fx = game.raceLength - game.camX;
+  if (fx > -60 && fx < W + 60) {
+    for (let row = 0; row < Math.ceil((trackBottom() - trackTop()) / 20); row++) {
+      for (let col = 0; col < 2; col++) {
+        ctx.fillStyle = (row + col) % 2 === 0 ? "#fff" : "#111";
+        ctx.fillRect(fx + col * 12, trackTop() + row * 20, 12, 20);
+      }
+    }
+    // 깃발
+    ctx.fillStyle = "#888";
+    ctx.fillRect(fx + 8, trackTop() - 90, 5, 90);
+    ctx.fillStyle = "#e74c3c";
+    ctx.beginPath();
+    ctx.moveTo(fx + 13, trackTop() - 90);
+    ctx.lineTo(fx + 60, trackTop() - 76);
+    ctx.lineTo(fx + 13, trackTop() - 62);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 16px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("결승", fx + 34, trackTop() - 70);
+  }
+}
+
+function drawDeco(kind, x, y, s) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+  switch (kind) {
+    case "tree":
+      ctx.fillStyle = "#7a5230"; ctx.fillRect(-5, -30, 10, 30);
+      ctx.fillStyle = "#2e7d32";
+      ctx.beginPath(); ctx.arc(0, -45, 24, 0, Math.PI * 2); ctx.fill();
+      break;
+    case "cactus":
+      ctx.fillStyle = "#3d8b40";
+      ctx.fillRect(-6, -46, 12, 46);
+      ctx.fillRect(-20, -36, 10, 8); ctx.fillRect(-20, -36, 8, 18);
+      ctx.fillRect(10, -28, 10, 8); ctx.fillRect(12, -28, 8, 14);
+      break;
+    case "snowman":
+      ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.arc(0, -14, 14, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(0, -36, 10, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#222";
+      ctx.beginPath(); ctx.arc(-3, -38, 1.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(3, -38, 1.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#e67e22";
+      ctx.beginPath(); ctx.moveTo(0, -35); ctx.lineTo(10, -33); ctx.lineTo(0, -31); ctx.fill();
+      break;
+    case "lava":
+      ctx.fillStyle = "#4a3333";
+      ctx.beginPath(); ctx.moveTo(-24, 0); ctx.lineTo(0, -44); ctx.lineTo(24, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#ff5722";
+      ctx.beginPath(); ctx.moveTo(-8, -30); ctx.lineTo(0, -44); ctx.lineTo(8, -30); ctx.closePath(); ctx.fill();
+      break;
+    case "building":
+      ctx.fillStyle = "#2a3040";
+      ctx.fillRect(-18, -70, 36, 70);
+      ctx.fillStyle = "#ffd76a";
+      for (let r = 0; r < 5; r++)
+        for (let c = 0; c < 3; c++)
+          if ((r * 3 + c) % 3 !== 1) ctx.fillRect(-13 + c * 11, -63 + r * 13, 7, 8);
+      break;
+    case "sakura":
+      ctx.fillStyle = "#7a5230"; ctx.fillRect(-4, -28, 8, 28);
+      ctx.fillStyle = "#ffb7d0";
+      ctx.beginPath(); ctx.arc(-8, -38, 14, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(10, -42, 12, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(0, -50, 13, 0, Math.PI * 2); ctx.fill();
+      break;
+  }
+  ctx.restore();
+}
+
+// ===================== HUD =====================
+const hudButtons = []; // {x,y,w,h,action}
+function drawHUD() {
+  hudButtons.length = 0;
+  const p = game.player;
+
+  // 상단 바
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.fillRect(0, 0, W, 52);
+
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#f1c40f";
+  ctx.font = "bold 20px sans-serif";
+  ctx.fillText("💰 " + game.points + "P", 14, 33);
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "15px sans-serif";
+  const aliveEnemies = game.racers.filter(r => !r.isPlayer && r.alive && !r.finished).length;
+  ctx.fillText("레이스 " + (game.raceIndex + 1) + " · " + theme().name, 130, 32);
+  ctx.fillText("남은 상대: " + aliveEnemies, 320, 32);
+
+  // 하트
+  for (let i = 0; i < p.maxHp; i++) {
+    ctx.font = "18px sans-serif";
+    ctx.fillText(i < p.hp ? "❤️" : "🖤", 440 + i * 24, 33);
+  }
+
+  // 진행 바
+  const barX = Math.min(W - 250, 540), barW = W - barX - 20;
+  if (barW > 80) {
+    ctx.fillStyle = "rgba(255,255,255,0.25)";
+    ctx.fillRect(barX, 20, barW, 10);
+    ctx.fillStyle = "#2ecc71";
+    ctx.fillRect(barX, 20, barW * Math.min(1, p.x / game.raceLength), 10);
+    // 상대 위치 점
+    for (const r of game.racers) {
+      if (r.isPlayer || !r.alive) continue;
+      ctx.fillStyle = r.finished ? "#f1c40f" : r.color;
+      ctx.beginPath();
+      ctx.arc(barX + barW * Math.min(1, r.x / game.raceLength), 25, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // 구매 버튼
+  const btnY = 58, btnH = 40;
+  const canSpeed = game.points >= SPEED_COST && game.speedLevel < MAX_SPEED_LEVEL;
+  const nextW = game.weaponLevel < WEAPONS.length - 1 ? WEAPONS[game.weaponLevel + 1] : null;
+  const canWeapon = nextW && game.points >= nextW.cost;
+
+  drawButton(10, btnY, 190, btnH,
+    "① 속도 UP (" + SPEED_COST + "P)  Lv." + game.speedLevel,
+    canSpeed ? "#27ae60" : "#555", "buySpeed");
+  drawButton(208, btnY, 210, btnH,
+    nextW ? ("② " + nextW.name + " (" + nextW.cost + "P)") : "② 최강 무기 보유!",
+    canWeapon ? "#d35400" : "#555", "buyWeapon");
+
+  // 현재 무기 표시
+  ctx.fillStyle = "rgba(255,255,255,0.8)";
+  ctx.font = "13px sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("무기: " + weapon().name, 428, btnY + 25);
+
+  // 조작 안내
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "13px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("↑↓ 이동 · 스페이스 공격 · 1/2 구매", W / 2, H - 8);
+
+  // 모바일 터치 버튼
+  if ("ontouchstart" in window) {
+    const s = 62;
+    drawTouchBtn(20, H - s * 2 - 30, s, "▲", "up");
+    drawTouchBtn(20, H - s - 20, s, "▼", "down");
+    drawTouchBtn(W - s - 24, H - s - 30, s + 8, "⚔", "attack");
+  }
+}
+function drawButton(x, y, w, h, text, color, action) {
+  ctx.fillStyle = color;
+  roundRect(x, y, w, h, 8);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 14px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(text, x + w / 2, y + h / 2 + 5);
+  hudButtons.push({ x, y, w, h, action });
+}
+function drawTouchBtn(x, y, s, label, action) {
+  ctx.fillStyle = "rgba(255,255,255,0.22)";
+  ctx.beginPath(); ctx.arc(x + s / 2, y + s / 2, s / 2, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.font = "bold " + (s * 0.45) + "px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(label, x + s / 2, y + s / 2 + s * 0.16);
+  hudButtons.push({ x, y, w: s, h: s, action, hold: action === "up" || action === "down" });
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// ===================== 화면들 =====================
+function drawSelectScreen() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, "#1a2a4a");
+  grad.addColorStop(1, "#2a4a7a");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.font = "bold " + Math.min(52, W * 0.08) + "px sans-serif";
+  ctx.fillText("⚔ 배틀 레이스 ⚔", W / 2, H * 0.18);
+  ctx.font = "18px sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.8)";
+  ctx.fillText("상대를 모두 쓰러뜨리고 1등으로 결승선을 통과하세요!", W / 2, H * 0.26);
+  ctx.fillText("처치 1명당 +10포인트 · 포인트로 속도와 무기 구매", W / 2, H * 0.31);
+
+  ctx.font = "bold 26px sans-serif";
+  ctx.fillStyle = "#f1c40f";
+  ctx.fillText("캐릭터를 선택하세요", W / 2, H * 0.42);
+
+  hudButtons.length = 0;
+  const cardW = Math.min(220, W * 0.4), cardH = 240;
+  const gap = 40;
+  const mx = W / 2 - cardW - gap / 2;
+  const fx = W / 2 + gap / 2;
+  const cy = H * 0.48;
+
+  drawCharCard(mx, cy, cardW, cardH, "M", "남자", "#3498db");
+  drawCharCard(fx, cy, cardW, cardH, "F", "여자", "#e91e63");
+}
+function drawCharCard(x, y, w, h, gender, label, color) {
+  ctx.fillStyle = "rgba(255,255,255,0.1)";
+  roundRect(x, y, w, h, 16); ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  roundRect(x, y, w, h, 16); ctx.stroke();
+
+  // 미리보기 캐릭터
+  const saveGender = game.gender;
+  game.gender = gender;
+  const preview = { isPlayer: true, y: y + h * 0.62, runPhase: 0, attackTimer: 0, alive: true, finished: true, invuln: 0 };
+  const savedIndex = game.raceIndex;
+  game.raceIndex = gender === "M" ? 1 : 0;
+  ctx.save();
+  ctx.translate(0, 0);
+  drawRunnerPreview(preview, x + w / 2, y + h * 0.62, 1.6);
+  ctx.restore();
+  game.raceIndex = savedIndex;
+  game.gender = saveGender;
+
+  ctx.fillStyle = color;
+  ctx.font = "bold 24px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(label, x + w / 2, y + h - 18);
+
+  hudButtons.push({ x, y, w, h, action: gender === "M" ? "selectM" : "selectF" });
+}
+function drawRunnerPreview(r, sx, sy, scale) {
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.scale(scale, scale);
+  ctx.translate(-sx, -sy);
+  r.y = sy;
+  drawRunner(r, sx);
+  ctx.restore();
+}
+
+function drawCountdown() {
+  drawBackground();
+  for (const r of game.racers) drawRunner(r, r.x - game.camX);
+  drawHUD();
+
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.font = "bold 120px sans-serif";
+  ctx.fillText(game.countdown > 0 ? game.countdown : "GO!", W / 2, H / 2 + 40);
+  ctx.font = "22px sans-serif";
+  ctx.fillText(theme().name + " — " + (game.racers.length - 1) + "명의 상대", W / 2, H / 2 + 100);
+}
+
+function drawResultScreen() {
+  ctx.fillStyle = "rgba(0,0,0,0.7)";
+  ctx.fillRect(0, 0, W, H);
+
+  const won = game.playerRank === 1;
+  ctx.textAlign = "center";
+  ctx.font = "bold 64px sans-serif";
+  ctx.fillStyle = won ? "#f1c40f" : "#e74c3c";
+  ctx.fillText(won ? "🏆 1등!" : game.playerRank + "등...", W / 2, H * 0.3);
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "22px sans-serif";
+  ctx.fillText("이번 레이스 처치: " + game.killsThisRace + "명 (+" + game.killsThisRace * 10 + "P)", W / 2, H * 0.42);
+  ctx.fillText("보유 포인트: " + game.points + "P · 총 처치: " + game.totalKills + "명", W / 2, H * 0.48);
+
+  hudButtons.length = 0;
+  const bw = 300, bh = 60;
+  if (won) {
+    ctx.fillStyle = "#2ecc71";
+    ctx.font = "20px sans-serif";
+    ctx.fillText("새로운 캐릭터와 함께 다음 맵으로!", W / 2, H * 0.57);
+    const next = THEMES[(game.raceIndex + 1) % THEMES.length];
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.fillText("다음 맵: " + next.name, W / 2, H * 0.62);
+    drawButton(W / 2 - bw / 2, H * 0.68, bw, bh, "다음 레이스 시작 ▶", "#27ae60", "nextRace");
+  } else {
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.font = "18px sans-serif";
+    ctx.fillText("1등을 해야 다음 맵으로 갈 수 있어요! 포인트로 업그레이드해보세요.", W / 2, H * 0.57);
+    drawButton(W / 2 - bw / 2, H * 0.66, bw, bh, "다시 도전 🔄", "#2980b9", "retryRace");
+  }
+}
+
+function drawGameOverScreen() {
+  ctx.fillStyle = "rgba(0,0,0,0.75)";
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center";
+  ctx.font = "bold 60px sans-serif";
+  ctx.fillStyle = "#e74c3c";
+  ctx.fillText("쓰러졌다...", W / 2, H * 0.35);
+  ctx.fillStyle = "#fff";
+  ctx.font = "20px sans-serif";
+  ctx.fillText("포인트는 그대로! 다시 도전해보세요.", W / 2, H * 0.45);
+  ctx.fillText("보유 포인트: " + game.points + "P", W / 2, H * 0.51);
+  hudButtons.length = 0;
+  drawButton(W / 2 - 150, H * 0.6, 300, 60, "다시 도전 🔄", "#2980b9", "retryRace");
+}
+
+// ===================== 업데이트 =====================
+function update(dt) {
+  game.time += dt;
+
+  // 이펙트
+  for (let i = game.effects.length - 1; i >= 0; i--) {
+    const e = game.effects[i];
+    e.life -= dt;
+    e.x += e.vx * dt;
+    e.y += e.vy * dt;
+    if (e.life <= 0) game.effects.splice(i, 1);
+  }
+  for (let i = game.floatTexts.length - 1; i >= 0; i--) {
+    const f = game.floatTexts[i];
+    f.life -= dt;
+    f.y -= 30 * dt;
+    if (f.life <= 0) game.floatTexts.splice(i, 1);
+  }
+
+  if (game.state === "countdown") {
+    game.countdownTimer -= dt;
+    if (game.countdownTimer <= 0) {
+      game.countdown--;
+      game.countdownTimer = 1;
+      if (game.countdown < 0) {
+        game.state = "race";
+      } else if (game.countdown === 0) {
+        sfx.go();
+      } else {
+        sfx.count();
+      }
+    }
+    return;
+  }
+
+  if (game.state !== "race") return;
+
+  const p = game.player;
+
+  // ---- 플레이어 이동 ----
+  if (p.alive && !p.finished) {
+    p.x += playerSpeed() * dt;
+    const vMove = 260;
+    if (input.up) p.y -= vMove * dt;
+    if (input.down) p.y += vMove * dt;
+    p.y = Math.max(trackTop() + 20, Math.min(trackBottom() - 6, p.y));
+    if (p.invuln > 0) p.invuln -= dt;
+    if (p.attackCooldownLeft > 0) p.attackCooldownLeft -= dt;
+    if (p.attackTimer > 0) p.attackTimer -= dt;
+
+    if (p.x >= game.raceLength) {
+      p.finished = true;
+      finishRace();
+      return;
+    }
+  }
+
+  // ---- AI ----
+  for (const r of game.racers) {
+    if (r.isPlayer || !r.alive || r.finished) continue;
+    r.x += r.baseSpeed * dt;
+    if (r.attackTimer > 0) r.attackTimer -= dt;
+    if (r.attackCooldownLeft > 0) r.attackCooldownLeft -= dt;
+
+    // 위아래로 살짝 흔들리며 달림 + 가끔 플레이어 쪽으로 접근
+    r.retargetTimer -= dt;
+    if (r.retargetTimer <= 0) {
+      r.retargetTimer = 1 + Math.random() * 2;
+      const chasePlayer = Math.random() < r.aggression * 0.5 && Math.abs(r.x - p.x) < 200;
+      r.targetY = chasePlayer && p.alive && !p.finished
+        ? p.y
+        : trackTop() + 20 + Math.random() * (trackBottom() - trackTop() - 30);
+    }
+    r.y += Math.sign(r.targetY - r.y) * Math.min(Math.abs(r.targetY - r.y), 120 * dt);
+
+    // 플레이어 공격
+    if (p.alive && !p.finished && p.invuln <= 0 && r.attackCooldownLeft <= 0) {
+      const dx = p.x - r.x;
+      const dy = Math.abs(p.y - r.y);
+      if (Math.abs(dx) < 50 && dy < 42) {
+        r.attackTimer = 0.22;
+        r.attackCooldownLeft = 1.6;
+        p.hp--;
+        p.invuln = 1.2;
+        sfx.hurt();
+        addFloat("-1 ❤", p.x, p.y - 70, "#e74c3c");
+        addPuff(p.x, p.y - 25);
+        if (p.hp <= 0) {
+          p.alive = false;
+          game.state = "gameover";
+          return;
+        }
+      }
+    }
+
+    if (r.x >= game.raceLength) {
+      r.finished = true;
+      game.finishOrder.push(r);
+    }
+  }
+
+  // 카메라
+  game.camX = Math.max(0, p.x - W * 0.3);
+}
+
+function finishRace() {
+  game.playerRank = game.finishOrder.length + 1;
+  game.state = "result";
+  if (game.playerRank === 1) sfx.win();
+}
+
+// ===================== 그리기 메인 =====================
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  if (game.state === "select") { drawSelectScreen(); return; }
+  if (game.state === "countdown") { drawCountdown(); return; }
+
+  drawBackground();
+
+  // 뒤에 있는 캐릭터부터 (y 정렬)
+  const sorted = game.racers.filter(r => r.alive).slice().sort((a, b) => a.y - b.y);
+  for (const r of sorted) {
+    const sx = r.x - game.camX;
+    if (sx > -60 && sx < W + 60) drawRunner(r, sx);
+  }
+
+  // 이펙트
+  for (const e of game.effects) {
+    ctx.globalAlpha = Math.max(0, e.life / e.maxLife);
+    ctx.fillStyle = e.color;
+    ctx.beginPath();
+    ctx.arc(e.x - game.camX, e.y, e.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // 떠오르는 텍스트
+  for (const f of game.floatTexts) {
+    ctx.globalAlpha = Math.min(1, f.life);
+    ctx.fillStyle = f.color;
+    ctx.font = "bold 18px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(f.text, f.x - game.camX, f.y);
+  }
+  ctx.globalAlpha = 1;
+
+  drawHUD();
+
+  if (game.state === "result") drawResultScreen();
+  if (game.state === "gameover") drawGameOverScreen();
+}
+
+// ===================== 입력 =====================
+const input = { up: false, down: false };
+
+window.addEventListener("keydown", (e) => {
+  if (e.code === "ArrowUp" || e.code === "KeyW") input.up = true;
+  if (e.code === "ArrowDown" || e.code === "KeyS") input.down = true;
+  if (e.code === "Space") { e.preventDefault(); handleAction("attack"); }
+  if (e.code === "Digit1") buySpeed();
+  if (e.code === "Digit2") buyWeapon();
+  if (e.code === "Enter") {
+    if (game.state === "result") handleAction(game.playerRank === 1 ? "nextRace" : "retryRace");
+    if (game.state === "gameover") handleAction("retryRace");
+  }
+});
+window.addEventListener("keyup", (e) => {
+  if (e.code === "ArrowUp" || e.code === "KeyW") input.up = false;
+  if (e.code === "ArrowDown" || e.code === "KeyS") input.down = false;
+});
+
+function handleAction(action) {
+  switch (action) {
+    case "selectM":
+      game.gender = "M"; setupRace(); break;
+    case "selectF":
+      game.gender = "F"; setupRace(); break;
+    case "attack":
+      playerAttack(); break;
+    case "buySpeed":
+      buySpeed(); break;
+    case "buyWeapon":
+      buyWeapon(); break;
+    case "nextRace":
+      game.raceIndex++; setupRace(); break;
+    case "retryRace":
+      setupRace(); break;
+  }
+}
+
+function pointerPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const t = e.touches ? e.touches[0] : e;
+  return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+}
+function hitButton(pos) {
+  for (const b of hudButtons) {
+    if (pos.x >= b.x && pos.x <= b.x + b.w && pos.y >= b.y && pos.y <= b.y + b.h) return b;
+  }
+  return null;
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  const pos = pointerPos(e);
+  const b = hitButton(pos);
+  if (!b) return;
+  if (b.hold) {
+    input[b.action] = true;
+  } else {
+    handleAction(b.action);
+  }
+});
+canvas.addEventListener("pointerup", () => {
+  input.up = false;
+  input.down = false;
+});
+canvas.addEventListener("pointercancel", () => {
+  input.up = false;
+  input.down = false;
+});
+
+// ===================== 메인 루프 =====================
+let lastTime = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - lastTime) / 1000);
+  lastTime = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
