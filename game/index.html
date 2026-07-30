@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>교차로 대전 - 로블록스 스타일 총게임</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚔️</text></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; }
+  #game-canvas { display: block; width: 100%; height: 100%; }
+
+  /* ===== HUD ===== */
+  #hud { position: fixed; inset: 0; pointer-events: none; user-select: none; }
+
+  #crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 40px; height: 40px; }
+  #crosshair .ch-line { position: absolute; background: #fff; box-shadow: 0 0 3px rgba(0,0,0,.8); transition: all .07s; }
+  #crosshair .ch-t { left: 19px; top: 4px;  width: 2px; height: 9px; }
+  #crosshair .ch-b { left: 19px; bottom: 4px; width: 2px; height: 9px; }
+  #crosshair .ch-l { top: 19px; left: 4px;  height: 2px; width: 9px; }
+  #crosshair .ch-r { top: 19px; right: 4px; height: 2px; width: 9px; }
+
+  #hitmarker { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%) rotate(45deg); width: 26px; height: 26px; opacity: 0; }
+  #hitmarker div { position: absolute; background: #fff; }
+  #hitmarker .hm1 { left: 12px; top: 0; width: 2px; height: 8px; }
+  #hitmarker .hm2 { left: 12px; bottom: 0; width: 2px; height: 8px; }
+  #hitmarker .hm3 { top: 12px; left: 0; height: 2px; width: 8px; }
+  #hitmarker .hm4 { top: 12px; right: 0; height: 2px; width: 8px; }
+  #hitmarker.kill div { background: #ff3b3b; }
+
+  #damage-vignette { position: absolute; inset: 0; opacity: 0; transition: opacity .35s;
+    background: radial-gradient(ellipse at center, rgba(255,0,0,0) 55%, rgba(255,0,0,.55) 100%); }
+
+  /* bottom-left: health */
+  #health-box { position: absolute; left: 24px; bottom: 24px; width: 280px; }
+  #health-label { color: #fff; font-weight: bold; font-size: 15px; text-shadow: 0 2px 3px rgba(0,0,0,.7); margin-bottom: 5px; }
+  #health-bar-bg { width: 100%; height: 20px; background: rgba(0,0,0,.55); border-radius: 10px; overflow: hidden; border: 2px solid rgba(255,255,255,.25); }
+  #health-bar { width: 100%; height: 100%; background: linear-gradient(#7CFC5A, #37b524); border-radius: 8px; transition: width .15s; }
+
+  /* bottom-right: ammo & weapon */
+  #ammo-box { position: absolute; right: 24px; bottom: 24px; text-align: right; color: #fff; text-shadow: 0 2px 4px rgba(0,0,0,.8); }
+  #weapon-name { font-size: 20px; font-weight: bold; letter-spacing: 1px; }
+  #ammo-count { font-size: 44px; font-weight: 900; line-height: 1.05; }
+  #ammo-count small { font-size: 20px; font-weight: bold; opacity: .75; }
+  #reload-hint { font-size: 14px; color: #ffd34d; height: 18px; }
+
+  /* weapon slots */
+  #weapon-slots { position: absolute; right: 24px; bottom: 130px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+  .wslot { color: #fff; background: rgba(0,0,0,.45); border: 1px solid rgba(255,255,255,.2); border-radius: 6px;
+    padding: 3px 10px; font-size: 13px; text-shadow: 0 1px 2px #000; opacity: .65; }
+  .wslot.active { background: rgba(255,255,255,.92); color: #111; text-shadow: none; font-weight: bold; opacity: 1; transform: scale(1.06); }
+  .wslot b { margin-right: 6px; }
+
+  /* top-center scoreboard */
+  #scoreboard { position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px; }
+  .team-score { font-size: 30px; font-weight: 900; color: #fff; padding: 4px 18px; border-radius: 8px; text-shadow: 0 2px 3px rgba(0,0,0,.6); }
+  #score-blue { background: linear-gradient(#3b7dff, #1e50c8); }
+  #score-red  { background: linear-gradient(#ff4d4d, #c22525); }
+  #score-target { color: #fff; font-size: 13px; text-shadow: 0 1px 3px #000; text-align: center; }
+
+  /* kill feed */
+  #killfeed { position: absolute; top: 16px; right: 16px; display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
+  .kf-item { background: rgba(0,0,0,.55); color: #fff; font-size: 13px; padding: 4px 10px; border-radius: 6px; text-shadow: 0 1px 2px #000; }
+  .kf-item .blue { color: #6ea4ff; font-weight: bold; }
+  .kf-item .red { color: #ff7b7b; font-weight: bold; }
+
+  /* center messages */
+  #center-msg { position: absolute; left: 50%; top: 34%; transform: translate(-50%,-50%); color: #fff;
+    font-size: 34px; font-weight: 900; text-shadow: 0 3px 6px rgba(0,0,0,.8); opacity: 0; transition: opacity .3s; text-align: center; }
+
+  /* sniper scope */
+  #scope { position: absolute; inset: 0; display: none; }
+  #scope .scope-dark { position: absolute; inset: 0;
+    background: radial-gradient(circle at center, rgba(0,0,0,0) 27%, rgba(0,0,0,.97) 28.5%); }
+  #scope .scope-h, #scope .scope-v { position: absolute; background: rgba(0,0,0,.9); }
+  #scope .scope-h { left: 0; right: 0; top: 50%; height: 1.5px; }
+  #scope .scope-v { top: 0; bottom: 0; left: 50%; width: 1.5px; }
+
+  /* frozen overlay (ice beam feedback when player slowed) */
+  #freeze-tint { position: absolute; inset: 0; opacity: 0; transition: opacity .3s;
+    background: radial-gradient(ellipse at center, rgba(120,200,255,0) 50%, rgba(120,200,255,.4) 100%); }
+
+  /* ===== Menu / overlay screens ===== */
+  .screen { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(10, 16, 34, .88); color: #fff; z-index: 10; text-align: center; }
+  .screen h1 { font-size: 46px; margin-bottom: 6px; text-shadow: 0 4px 0 rgba(0,0,0,.4); }
+  .screen h1 .hl { color: #ffd34d; }
+  .screen h2 { font-size: 20px; font-weight: normal; color: #bcd0ff; margin-bottom: 26px; }
+  .screen .panel { background: rgba(0,0,0,.4); border: 1px solid rgba(255,255,255,.15); border-radius: 14px;
+    padding: 20px 34px; margin-bottom: 26px; font-size: 15px; line-height: 1.85; text-align: left; }
+  .screen .panel b { color: #ffd34d; }
+  .big-btn { pointer-events: auto; cursor: pointer; font-size: 24px; font-weight: 900; color: #fff; border: none;
+    background: linear-gradient(#4b8bff, #2557d6); padding: 16px 60px; border-radius: 12px;
+    box-shadow: 0 6px 0 #16367e; font-family: inherit; }
+  .big-btn:hover { filter: brightness(1.12); }
+  .big-btn:active { transform: translateY(4px); box-shadow: 0 2px 0 #16367e; }
+  #result-title.win  { color: #7CFC5A; }
+  #result-title.lose { color: #ff6b6b; }
+  #end-screen { display: none; }
+  #respawn-screen { display: none; background: rgba(60,0,0,.45); }
+  #respawn-screen h1 { color: #ff6b6b; }
+</style>
+</head>
+<body>
+<canvas id="game-canvas"></canvas>
+
+<div id="hud">
+  <div id="damage-vignette"></div>
+  <div id="freeze-tint"></div>
+  <div id="scope"><div class="scope-dark"></div><div class="scope-h"></div><div class="scope-v"></div></div>
+  <div id="crosshair">
+    <div class="ch-line ch-t"></div><div class="ch-line ch-b"></div>
+    <div class="ch-line ch-l"></div><div class="ch-line ch-r"></div>
+  </div>
+  <div id="hitmarker"><div class="hm1"></div><div class="hm2"></div><div class="hm3"></div><div class="hm4"></div></div>
+
+  <div id="scoreboard">
+    <div class="team-score" id="score-blue">0</div>
+    <div id="score-target">먼저 25킬<br>승리</div>
+    <div class="team-score" id="score-red">0</div>
+  </div>
+
+  <div id="killfeed"></div>
+  <div id="center-msg"></div>
+
+  <div id="health-box">
+    <div id="health-label">체력 <span id="health-num">100</span></div>
+    <div id="health-bar-bg"><div id="health-bar"></div></div>
+  </div>
+
+  <div id="weapon-slots"></div>
+  <div id="ammo-box">
+    <div id="weapon-name">돌격소총</div>
+    <div id="ammo-count">30 <small>/ ∞</small></div>
+    <div id="reload-hint"></div>
+  </div>
+</div>
+
+<div class="screen" id="start-screen">
+  <h1>⚔️ 교차로 <span class="hl">대전</span> ⚔️</h1>
+  <h2>로블록스 라이벌 스타일 팀 데스매치 — 파랑팀 vs 빨강팀, 먼저 25킬을 달성하면 승리!</h2>
+  <div class="panel">
+    <b>이동</b> W A S D &nbsp;·&nbsp; <b>점프</b> Space &nbsp;·&nbsp; <b>달리기</b> Shift<br>
+    <b>발사</b> 마우스 왼쪽 &nbsp;·&nbsp; <b>조준(저격총)</b> 마우스 오른쪽 &nbsp;·&nbsp; <b>재장전</b> R<br>
+    <b>무기 교체</b> 숫자 1~6 또는 마우스 휠<br>
+    <b>1</b> 돌격소총 · <b>2</b> 샷건 · <b>3</b> 저격소총 · <b>4</b> RPG · <b>5</b> 얼음 광선 · <b>6</b> 수류탄
+  </div>
+  <button class="big-btn" id="start-btn">게임 시작</button>
+</div>
+
+<div class="screen" id="respawn-screen">
+  <h1>💀 쓰러졌다!</h1>
+  <h2><span id="respawn-timer">3</span>초 후 리스폰...</h2>
+</div>
+
+<div class="screen" id="end-screen">
+  <h1 id="result-title">승리!</h1>
+  <h2 id="result-detail"></h2>
+  <button class="big-btn" id="restart-btn">다시 하기</button>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./lib/three.module.min.js" } }
+</script>
+<script type="module" src="./game.js"></script>
+</body>
+</html>
