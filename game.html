@@ -2,12 +2,15 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>배틀 레이스 3D</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body { width:100%; height:100%; overflow:hidden; background:#000;
-    font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif; user-select:none; -webkit-user-select:none; }
+    font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif; user-select:none; -webkit-user-select:none;
+    touch-action:none; overscroll-behavior:none; -webkit-tap-highlight-color:transparent; }
   #game { display:block; width:100vw; height:100vh; touch-action:none; }
 
   .overlay { position:fixed; left:0; top:0; width:100%; height:100%; pointer-events:none; }
@@ -71,14 +74,25 @@
   /* ---------- 모바일 ---------- */
   #touchUI { display:none; }
   .touchBtn { position:fixed; border-radius:50%; background:rgba(255,255,255,0.22);
-    color:#fff; font-size:26px; display:flex; align-items:center; justify-content:center;
-    pointer-events:auto; }
-  #btnAttack { right:22px; bottom:90px; width:76px; height:76px; }
-  #btnJump { right:110px; bottom:36px; width:60px; height:60px; font-size:18px; }
-  #stick { left:30px; bottom:40px; width:120px; height:120px; position:fixed;
-    border-radius:50%; background:rgba(255,255,255,0.12); pointer-events:auto; }
-  #stickKnob { position:absolute; left:35px; top:35px; width:50px; height:50px;
+    color:#fff; font-size:30px; display:flex; align-items:center; justify-content:center;
+    pointer-events:auto; border:2px solid rgba(255,255,255,0.25); }
+  .touchBtn:active { background:rgba(255,255,255,0.4); }
+  #btnAttack { right:24px; bottom:110px; width:92px; height:92px; }
+  #btnJump { right:130px; bottom:44px; width:68px; height:68px; font-size:17px; }
+  #btnRun { right:34px; bottom:26px; width:68px; height:68px; font-size:26px; }
+  #btnRun.on { background:rgba(46,204,113,0.55); border-color:#2ecc71; }
+  #stick { left:26px; bottom:36px; width:140px; height:140px; position:fixed;
+    border-radius:50%; background:rgba(255,255,255,0.12); pointer-events:auto;
+    border:2px solid rgba(255,255,255,0.18); }
+  #stickKnob { position:absolute; left:42px; top:42px; width:56px; height:56px;
     border-radius:50%; background:rgba(255,255,255,0.35); }
+  #rotateHint { display:none; position:fixed; top:130px; width:100%; text-align:center;
+    color:#ffd76a; font-size:16px; text-shadow:0 2px 5px #000; pointer-events:none; z-index:5; }
+  @media (orientation:portrait) and (pointer:coarse) { #rotateHint { display:block; } }
+  @media (pointer:coarse) {
+    .shopBtn { font-size:15px; padding:13px 16px; }
+    .bigBtn { padding:16px 38px; }
+  }
 </style>
 </head>
 <body>
@@ -135,7 +149,9 @@
   <div id="stick"><div id="stickKnob"></div></div>
   <div id="btnAttack" class="touchBtn">⚔</div>
   <div id="btnJump" class="touchBtn">점프</div>
+  <div id="btnRun" class="touchBtn">🏃</div>
 </div>
+<div id="rotateHint">📱 가로로 돌리면 더 편하게 플레이할 수 있어요!</div>
 
 <script src="three.min.js"></script>
 <script>
@@ -876,6 +892,7 @@ function update(dt) {
     if (input.l) mx -= 1;
     if (input.r) mx += 1;
     mx += touchMove.x; mz += touchMove.y;
+    if (touchAutoRun) mz -= 1;
     const len = Math.hypot(mx, mz);
     if (len > 0.01) {
       mx /= Math.max(1, len); mz /= Math.max(1, len);
@@ -1017,6 +1034,7 @@ function finishRace() {
 // ===================== 입력 =====================
 const input = { f:false, b:false, l:false, r:false, lookL:false, lookR:false, lookU:false, lookD:false };
 const touchMove = { x: 0, y: 0 };
+let touchAutoRun = false;
 const isTouch = "ontouchstart" in window;
 
 window.addEventListener("keydown", (e) => {
@@ -1086,9 +1104,14 @@ $("gameoverBtn").addEventListener("click", () => setupRace());
 
 // ---- 터치 조작 ----
 if (isTouch) {
-  $("hint").textContent = "왼쪽 스틱 이동 · 화면 드래그 시점 · ⚔ 공격";
+  $("hint").textContent = "왼쪽 스틱 이동 · 🏃 자동 달리기 · 화면 드래그 시점 · ⚔ 공격";
   const stick = $("stick"), knob = $("stickKnob");
   let stickId = null, lookId = null, lookLast = null;
+
+  // iOS는 첫 터치 후에만 소리 재생 가능
+  window.addEventListener("touchstart", () => {
+    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+  }, { passive: true });
 
   window.addEventListener("touchstart", (e) => {
     for (const t of e.changedTouches) {
@@ -1133,10 +1156,30 @@ if (isTouch) {
     }
   }, { passive: true });
 
-  $("btnAttack").addEventListener("touchstart", (e) => { e.preventDefault(); playerAttack(); });
+  // 공격 버튼: 꾹 누르면 연속 공격
+  let attackHold = null;
+  $("btnAttack").addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    playerAttack();
+    if (attackHold) clearInterval(attackHold);
+    attackHold = setInterval(playerAttack, 130);
+  });
+  const stopAttack = () => { if (attackHold) { clearInterval(attackHold); attackHold = null; } };
+  $("btnAttack").addEventListener("touchend", stopAttack);
+  $("btnAttack").addEventListener("touchcancel", stopAttack);
+
   $("btnJump").addEventListener("touchstart", (e) => {
     e.preventDefault();
-    if (game.state === "race" && player.pos.y <= 0) { player.vy = 11; sfx.jump(); }
+    if (game.state === "race" && player.alive && !player.finished && player.pos.y <= 0) {
+      player.vy = 11; sfx.jump();
+    }
+  });
+
+  // 자동 달리기 토글
+  $("btnRun").addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    touchAutoRun = !touchAutoRun;
+    $("btnRun").classList.toggle("on", touchAutoRun);
   });
 }
 
