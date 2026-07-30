@@ -175,6 +175,7 @@ const sfx = {
   swing: () => beep(300, 0.06, "triangle", 0.04),
   buy:   () => { beep(660, 0.08); beep(990, 0.12); },
   hurt:  () => beep(150, 0.25, "sawtooth"),
+  hit:   () => beep(620, 0.07, "square", 0.05),
   win:   () => { beep(523, 0.15); setTimeout(() => beep(659, 0.15), 150); setTimeout(() => beep(784, 0.3), 300); },
   go:    () => beep(784, 0.25),
   count: () => beep(392, 0.15),
@@ -201,11 +202,11 @@ const OUTFITS = [
 const ENEMY_COLORS = [0xc0392b, 0x8e44ad, 0xd35400, 0x16a085, 0x7f8c8d, 0x2980b9, 0xb8860b];
 const ENEMY_NAMES = ["빨강이", "보라돌이", "주황이", "청록이", "회색늑대", "파랑이", "황금이"];
 const WEAPONS = [
-  { name:"낡은 칼",   range:3.2, cooldown:0.55, len:1.4, color:0xb0b0b0, cost:0 },
-  { name:"긴 칼",     range:4.2, cooldown:0.48, len:1.9, color:0xd8d8e8, cost:20 },
-  { name:"창",        range:5.5, cooldown:0.42, len:2.6, color:0xc8a878, cost:20 },
-  { name:"대검",      range:6.5, cooldown:0.38, len:3.0, color:0x88c8f0, cost:20 },
-  { name:"전설의 검", range:8.0, cooldown:0.30, len:3.4, color:0xffd700, cost:20 },
+  { name:"낡은 칼",   range:3.2, cooldown:0.55, len:1.4, color:0xb0b0b0, cost:0,  dmg:1 },
+  { name:"긴 칼",     range:4.2, cooldown:0.48, len:1.9, color:0xd8d8e8, cost:20, dmg:1 },
+  { name:"창",        range:5.5, cooldown:0.42, len:2.6, color:0xc8a878, cost:20, dmg:2 },
+  { name:"대검",      range:6.5, cooldown:0.38, len:3.0, color:0x88c8f0, cost:20, dmg:2 },
+  { name:"전설의 검", range:8.0, cooldown:0.30, len:3.4, color:0xffd700, cost:20, dmg:3 },
 ];
 const SPEED_COST = 10, MAX_SPEED_LEVEL = 12;
 const ROAD_W = 34;
@@ -259,6 +260,7 @@ const player = {
   attackAnim: 0,
 };
 let enemies = [];      // {group, parts, x,z, speed, alive, finished, ...}
+let obstacles = [];    // 트랙 장애물
 let gibs = [];         // 처치 시 날아가는 파츠
 let floats = [];       // 떠오르는 텍스트 {el, pos, life}
 let viewmodel = null;  // 1인칭 팔+무기
@@ -501,6 +503,94 @@ function makeBannerText(sc, z) {
   sc.add(m);
 }
 
+// ===================== 장애물 =====================
+const OB_WOOD = { tree:0x8a5a2b, cactus:0xb08040, snow:0x9fd0e8, lava:0x3a2a2a, building:0x777777, sakura:0x8a5a2b };
+
+function buildObstacles(sc) {
+  obstacles = [];
+  const t = theme();
+  const count = Math.min(4 + game.raceIndex * 3, 22);
+  const woodCol = OB_WOOD[t.deco] || 0x8a5a2b;
+  let z = -35;
+  for (let i = 0; i < count && z > -game.raceLength + 40; i++) {
+    z -= 14 + Math.random() * (Math.max(30, (game.raceLength - 80) / count));
+    const x = -ROAD_W / 2 + 4 + Math.random() * (ROAD_W - 8);
+    // 레이스가 진행될수록 위험한 종류가 늘어남
+    const roll = Math.random();
+    let type;
+    if (game.raceIndex >= 2 && roll < 0.18) type = "mover";
+    else if (game.raceIndex >= 1 && roll < 0.42) type = "spike";
+    else if (roll < 0.72) type = "hurdle";
+    else type = "block";
+    addObstacle(sc, type, x, z, woodCol);
+  }
+}
+
+function addObstacle(sc, type, x, z, woodCol) {
+  const g = new THREE.Group();
+  const ob = { type, x, z, currentX: x, mesh: g };
+  switch (type) {
+    case "hurdle": {   // 낮은 허들 — 점프로 넘기
+      ob.w = 6; ob.d = 0.8; ob.h = 1.15;
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(6, 0.5, 0.5), lambert(woodCol));
+      bar.position.y = 0.9; g.add(bar);
+      for (const s of [-1, 1]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.15, 0.4), lambert(woodCol));
+        post.position.set(s * 2.8, 0.57, 0); g.add(post);
+      }
+      break;
+    }
+    case "block": {    // 큰 블록 — 돌아가기
+      ob.w = 4.5 + Math.random() * 2; ob.d = 2; ob.h = 3.2;
+      const box = new THREE.Mesh(new THREE.BoxGeometry(ob.w, 3.2, 2), lambert(woodCol));
+      box.position.y = 1.6; g.add(box);
+      const top = new THREE.Mesh(new THREE.BoxGeometry(ob.w + 0.4, 0.3, 2.4), lambert(0x222222));
+      top.position.y = 3.35; g.add(top);
+      break;
+    }
+    case "spike": {    // 가시 — 밟으면 데미지 (점프로 넘기)
+      ob.w = 3.2; ob.d = 1.6; ob.h = 1.5;
+      const base = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.3, 1.6), lambert(0x5a1f1f));
+      base.position.y = 0.15; g.add(base);
+      for (let i = -1; i <= 1; i++) {
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.3, 6), lambert(0xd93a2b));
+        cone.position.set(i * 1.0, 0.95, 0); g.add(cone);
+      }
+      break;
+    }
+    case "mover": {    // 좌우로 움직이는 벽 — 타이밍 맞춰 피하기
+      ob.w = 5; ob.d = 1.2; ob.h = 3;
+      ob.baseX = 0;
+      ob.range = ROAD_W / 2 - 4;
+      ob.speedM = 0.7 + Math.random() * 0.5 + game.raceIndex * 0.06;
+      ob.phase = Math.random() * 6.28;
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(5, 3, 1.2), lambert(0x2c3e50));
+      wall.position.y = 1.5; g.add(wall);
+      for (const s of [-1, 1]) {
+        const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.2, 3.05, 1.25), lambert(0xf1c40f));
+        stripe.position.set(s * 1.55, 1.5, 0); g.add(stripe);
+      }
+      break;
+    }
+  }
+  g.position.set(type === "mover" ? 0 : x, 0, z);
+  sc.add(g);
+  obstacles.push(ob);
+}
+
+// 장애물 AABB 충돌 처리: {px,pz,py} → 보정된 좌표 or 'spike' 반환
+function resolveObstacle(ob, px, pz, py, pad) {
+  const ox = ob.currentX;
+  const hw = ob.w / 2 + pad, hd = ob.d / 2 + pad;
+  const dx = px - ox, dz = pz - ob.z;
+  if (Math.abs(dx) >= hw || Math.abs(dz) >= hd) return null;
+  if (py >= ob.h - 0.2) return null;                     // 점프로 넘는 중
+  if (ob.type === "spike") return { spike: true };
+  const penX = hw - Math.abs(dx), penZ = hd - Math.abs(dz);
+  if (penX < penZ) return { x: ox + Math.sign(dx || 1) * hw, z: pz };
+  return { x: px, z: ob.z + Math.sign(dz || 1) * hd };
+}
+
 function buildDecorations(sc) {
   const t = theme();
   for (let z = -15; z > -game.raceLength - 30; z -= 10 + Math.random() * 16) {
@@ -584,6 +674,7 @@ function setupRace() {
   buildLights(scene);
   buildTrack(scene);
   buildDecorations(scene);
+  buildObstacles(scene);
   scene.add(camera);
   buildViewmodel();
 
@@ -603,7 +694,9 @@ function setupRace() {
   enemies = [];
   gibs = [];
   clearFloats();
+  // 레이스가 진행될수록 상대가 더 빠르고, 공격적이고, 튼튼해짐
   const enemyCount = Math.min(5 + Math.floor(game.raceIndex / 2), 7);
+  const enemyHp = Math.min(1 + Math.floor(game.raceIndex / 2), 3);
   for (let i = 0; i < enemyCount; i++) {
     const color = ENEMY_COLORS[i % ENEMY_COLORS.length];
     const group = buildCharacter({
@@ -613,16 +706,30 @@ function setupRace() {
     if (Math.abs(x) < 2.5) x += x >= 0 ? 2.5 : -2.5;   // 플레이어 시야를 가리지 않게 중앙은 비움
     group.position.set(x, 0, -6);
     scene.add(group);
+    // 체력 표시 (2 이상일 때만)
+    const pips = [];
+    if (enemyHp > 1) {
+      for (let p = 0; p < enemyHp; p++) {
+        const pip = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 0.32),
+          new THREE.MeshBasicMaterial({ color: 0xe74c3c }));
+        pip.position.set((p - (enemyHp - 1) / 2) * 0.5, 6.2, 0);
+        group.add(pip);
+        pips.push(pip);
+      }
+    }
     enemies.push({
-      group,
+      group, pips,
       name: ENEMY_NAMES[i % ENEMY_NAMES.length],
       x, z: -6,
-      speed: 12.5 + Math.random() * 2.5 + game.raceIndex * 0.7,
+      speed: 12.5 + Math.random() * 2.5 + game.raceIndex * 1.1,
       alive: true, finished: false,
+      hp: enemyHp,
+      hitFlash: 0,
       targetX: x, retargetTimer: Math.random() * 2,
       attackCooldownLeft: 1 + Math.random() * 2,
+      attackCooldown: Math.max(0.9, 1.6 - game.raceIndex * 0.08),
       attackAnim: 0,
-      aggression: 0.4 + Math.random() * 0.4 + game.raceIndex * 0.05,
+      aggression: 0.4 + Math.random() * 0.4 + game.raceIndex * 0.08,
       runPhase: Math.random() * 10,
     });
   }
@@ -630,7 +737,9 @@ function setupRace() {
   game.countdown = 3;
   game.countdownTimer = 1;
   setState("countdown");
-  showBig("3", t.name + " — 상대 " + enemyCount + "명");
+  let sub = t.name + " — 상대 " + enemyCount + "명 · 장애물 " + obstacles.length + "개";
+  if (enemyHp > 1) sub += " · 적 체력 " + enemyHp;
+  showBig("3", sub);
   sfx.count();
 }
 
@@ -787,7 +896,23 @@ function playerAttack() {
     const dist = Math.hypot(dx, dz);
     if (dist > w.range) continue;
     const dot = (dx * fw.x + dz * fw.z) / (dist || 1);
-    if (dot > 0.55) killEnemy(e);
+    if (dot > 0.55) damageEnemy(e, weapon().dmg);
+  }
+}
+function damageEnemy(e, dmg) {
+  e.hp -= dmg;
+  if (e.hp <= 0) { killEnemy(e); return; }
+  // 아직 살아있음 — 피격 연출 + 밀려남
+  e.hitFlash = 0.18;
+  e.z += 1.4;
+  sfx.hit();
+  addFloat("💥", new THREE.Vector3(e.x, 5.2, e.z), "#fff");
+  for (let p = 0; p < e.pips.length; p++) e.pips[p].visible = p < e.hp;
+}
+function setFlash(group, on) {
+  for (const m of group.userData.parts.all) {
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    for (const mat of mats) if (mat.emissive) mat.emissive.setHex(on ? 0x884444 : 0x000000);
   }
 }
 function killEnemy(e) {
@@ -797,6 +922,15 @@ function killEnemy(e) {
   game.killsThisRace++;
   sfx.kill();
   addFloat("+10P", new THREE.Vector3(e.x, 5, e.z), "#f1c40f");
+  scatterParts(e);
+}
+function hazardKillEnemy(e) {   // 장애물에 당함 — 포인트 없음
+  e.alive = false;
+  sfx.hit();
+  addFloat("💀 " + e.name, new THREE.Vector3(e.x, 5, e.z), "#e74c3c");
+  scatterParts(e);
+}
+function scatterParts(e) {
   // 파츠 분해 (로블록스 스타일로 블록이 튕겨나감)
   const worldPos = new THREE.Vector3();
   for (const mesh of e.group.userData.parts.all) {
@@ -882,6 +1016,13 @@ function update(dt) {
 
   if (game.state !== "race") return;
 
+  // ---- 움직이는 장애물 ----
+  for (const ob of obstacles) {
+    if (ob.type !== "mover") continue;
+    ob.currentX = ob.baseX + Math.sin(game.time * ob.speedM + ob.phase) * ob.range;
+    ob.mesh.position.x = ob.currentX;
+  }
+
   // ---- 플레이어 이동 ----
   if (player.alive && !player.finished) {
     applyLook(dt);
@@ -902,6 +1043,21 @@ function update(dt) {
     }
     player.pos.x = Math.max(-ROAD_W / 2 + 1, Math.min(ROAD_W / 2 - 1, player.pos.x));
     player.pos.z = Math.min(4, player.pos.z);
+
+    // 장애물 충돌
+    for (const ob of obstacles) {
+      const hit = resolveObstacle(ob, player.pos.x, player.pos.z, player.pos.y, 0.6);
+      if (!hit) continue;
+      if (hit.spike) {
+        if (player.invuln <= 0) hurtPlayer();
+        player.pos.z = ob.z + ob.d / 2 + 1.4;   // 밀려남
+        if (game.state !== "race") return;
+      } else {
+        player.pos.x = hit.x;
+        player.pos.z = hit.z;
+      }
+    }
+    player.pos.x = Math.max(-ROAD_W / 2 + 1, Math.min(ROAD_W / 2 - 1, player.pos.x));
 
     // 점프
     player.vy -= 30 * dt;
@@ -956,6 +1112,21 @@ function update(dt) {
     }
     e.x = Math.max(-ROAD_W / 2 + 1, Math.min(ROAD_W / 2 - 1, e.x));
 
+    // 장애물 회피 + 충돌
+    for (const ob of obstacles) {
+      const ahead = e.z - ob.z;
+      if (ahead > 0 && ahead < 9 && Math.abs(e.x - ob.currentX) < ob.w / 2 + 1.2 && !e.chasing) {
+        e.targetX = Math.max(-ROAD_W / 2 + 2, Math.min(ROAD_W / 2 - 2,
+          ob.currentX + (e.x >= ob.currentX ? 1 : -1) * (ob.w / 2 + 2.5)));
+      }
+      const hit = resolveObstacle(ob, e.x, e.z, 0, 0.5);
+      if (!hit) continue;
+      if (hit.spike) { hazardKillEnemy(e); break; }
+      e.x = hit.x; e.z = hit.z;
+    }
+    if (!e.alive) continue;
+    e.x = Math.max(-ROAD_W / 2 + 1, Math.min(ROAD_W / 2 - 1, e.x));
+
     // 공격
     if (e.attackCooldownLeft > 0) e.attackCooldownLeft -= dt;
     if (e.attackAnim > 0) {
@@ -969,7 +1140,7 @@ function update(dt) {
     if (player.alive && !player.finished && player.invuln <= 0 &&
         e.attackCooldownLeft <= 0 && distToPlayer < 2.6) {
       e.attackAnim = 0.25;
-      e.attackCooldownLeft = 1.6;
+      e.attackCooldownLeft = e.attackCooldown;
       hurtPlayer();
       if (game.state !== "race") return;
     }
@@ -982,6 +1153,13 @@ function update(dt) {
       : 0;
     e.runPhase += dt * 11;
     animateRun(e.group, e.runPhase, 1);
+
+    // 피격 번쩍임
+    if (e.hitFlash > 0) {
+      e.hitFlash -= dt;
+      setFlash(e.group, true);
+      if (e.hitFlash <= 0) setFlash(e.group, false);
+    }
 
     // 완주
     if (e.z <= -game.raceLength) {
