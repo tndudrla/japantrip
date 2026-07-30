@@ -323,8 +323,8 @@ function buildCharacter(cfg) {
     parts[side < 0 ? "armL" : "armR"] = pivot;
   }
 
-  // 오른손 칼
-  const sword = buildSword(1.4, 0xb0b0b0);
+  // 오른손 무기 (강한 적일수록 강한 무기)
+  const sword = buildSword(cfg.weaponLen || 1.4, cfg.weaponColor || 0xb0b0b0);
   sword.position.set(0, -2, -0.4);
   sword.rotation.x = -Math.PI / 2.3;
   parts.armR.add(sword);
@@ -694,13 +694,16 @@ function setupRace() {
   enemies = [];
   gibs = [];
   clearFloats();
-  // 레이스가 진행될수록 상대가 더 빠르고, 공격적이고, 튼튼해짐
+  // 레이스가 진행될수록 상대가 더 빠르고, 공격적이고, 튼튼해지고, 무기도 강해짐
   const enemyCount = Math.min(5 + Math.floor(game.raceIndex / 2), 7);
-  const enemyHp = Math.min(1 + Math.floor(game.raceIndex / 2), 3);
+  const enemyHp = Math.min(1 + Math.floor(game.raceIndex / 2), 4);
+  const enemyWeaponTier = Math.min(Math.floor((game.raceIndex + 1) / 2), WEAPONS.length - 1);
+  const enemyWeapon = WEAPONS[enemyWeaponTier];
   for (let i = 0; i < enemyCount; i++) {
     const color = ENEMY_COLORS[i % ENEMY_COLORS.length];
     const group = buildCharacter({
       shirt: color, pants: 0x333333, hair: 0x222222, female: Math.random() < 0.5,
+      weaponLen: enemyWeapon.len, weaponColor: enemyWeapon.color,
     });
     let x = -ROAD_W / 2 + 4 + (i + 0.5) * (ROAD_W - 8) / enemyCount;
     if (Math.abs(x) < 2.5) x += x >= 0 ? 2.5 : -2.5;   // 플레이어 시야를 가리지 않게 중앙은 비움
@@ -721,15 +724,18 @@ function setupRace() {
       group, pips,
       name: ENEMY_NAMES[i % ENEMY_NAMES.length],
       x, z: -6,
-      speed: 12.5 + Math.random() * 2.5 + game.raceIndex * 1.1,
+      speed: 13 + Math.random() * 2 + game.raceIndex * 1.6,
       alive: true, finished: false,
       hp: enemyHp,
       hitFlash: 0,
       targetX: x, retargetTimer: Math.random() * 2,
       attackCooldownLeft: 1 + Math.random() * 2,
-      attackCooldown: Math.max(0.9, 1.6 - game.raceIndex * 0.08),
+      attackCooldown: Math.max(0.6, 1.5 - game.raceIndex * 0.12),
+      attackRange: 2.2 + enemyWeaponTier * 0.45,
+      dmg: enemyWeaponTier >= 3 ? 2 : 1,        // 대검부터는 하트 2개 데미지
+      chaseRange: 25 + game.raceIndex * 2,
       attackAnim: 0,
-      aggression: 0.4 + Math.random() * 0.4 + game.raceIndex * 0.08,
+      aggression: 0.4 + Math.random() * 0.4 + game.raceIndex * 0.1,
       runPhase: Math.random() * 10,
     });
   }
@@ -739,6 +745,7 @@ function setupRace() {
   setState("countdown");
   let sub = t.name + " — 상대 " + enemyCount + "명 · 장애물 " + obstacles.length + "개";
   if (enemyHp > 1) sub += " · 적 체력 " + enemyHp;
+  if (enemyWeaponTier > 0) sub += " · 적 무기: " + enemyWeapon.name + (enemyWeaponTier >= 3 ? " ⚠️" : "");
   showBig("3", sub);
   sfx.count();
 }
@@ -960,10 +967,12 @@ function updateGibs(dt) {
     g.mesh.rotation.y += g.spin.y * dt;
   }
 }
-function hurtPlayer() {
-  player.hp--;
+function hurtPlayer(dmg) {
+  dmg = dmg || 1;
+  player.hp -= dmg;
   player.invuln = 1.2;
   sfx.hurt();
+  addFloat("-" + dmg + " ❤", camera.position.clone().add(forwardVec().multiplyScalar(4)), "#e74c3c");
   const flash = $("damageFlash");
   flash.style.opacity = 1;
   setTimeout(() => flash.style.opacity = 0, 180);
@@ -1095,7 +1104,7 @@ function update(dt) {
     const distToPlayer = Math.hypot(e.x - player.pos.x, e.z - player.pos.z);
     if (e.retargetTimer <= 0) {
       e.retargetTimer = 1 + Math.random() * 2;
-      const chase = player.alive && !player.finished && distToPlayer < 25 && Math.random() < e.aggression * 0.6;
+      const chase = player.alive && !player.finished && distToPlayer < e.chaseRange && Math.random() < e.aggression * 0.6;
       e.chasing = chase;
       e.targetX = chase ? player.pos.x : (-ROAD_W / 2 + 3 + Math.random() * (ROAD_W - 6));
     }
@@ -1138,10 +1147,10 @@ function update(dt) {
       e.group.userData.attacking = false;
     }
     if (player.alive && !player.finished && player.invuln <= 0 &&
-        e.attackCooldownLeft <= 0 && distToPlayer < 2.6) {
+        e.attackCooldownLeft <= 0 && distToPlayer < e.attackRange) {
       e.attackAnim = 0.25;
       e.attackCooldownLeft = e.attackCooldown;
-      hurtPlayer();
+      hurtPlayer(e.dmg);
       if (game.state !== "race") return;
     }
 
