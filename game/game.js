@@ -11,6 +11,7 @@ const WIN_SCORE = 25;
 const GRAVITY = 26;
 const STEP_HEIGHT = 0.62;
 
+const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 const canvas = document.getElementById('game-canvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -46,7 +47,11 @@ scene.add(sun);
 // 간단 효과음 (WebAudio 합성 — 외부 파일 불필요)
 // ------------------------------------------------------------
 let AC = null;
-function audio() { if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)(); return AC; }
+function audio() {
+  if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+  if (AC.state === 'suspended') AC.resume();
+  return AC;
+}
 function envGain(t0, peak, dur) {
   const g = audio().createGain();
   g.gain.setValueAtTime(peak, t0);
@@ -450,6 +455,7 @@ WEAPONS.forEach((w, i) => {
   const el = document.createElement('div');
   el.className = 'wslot';
   el.innerHTML = `<b>${i + 1}</b>${w.name}`;
+  el.addEventListener('click', () => switchWeapon(i)); // 모바일: 터치로 무기 교체
   hud.slots.appendChild(el);
 });
 
@@ -753,6 +759,7 @@ function respawnPlayer() {
   tryLockPointer();
 }
 function tryLockPointer() {
+  if (IS_TOUCH) return; // 모바일은 포인터 잠금 불필요
   try {
     const p = canvas.requestPointerLock();
     if (p && p.catch) p.catch(() => {});
@@ -954,7 +961,15 @@ $('start-btn').addEventListener('click', () => {
     gameState = 'playing';
     showCenterMsg('⚔️ 교차로 대전 시작! ⚔️');
   }
-  canvas.requestPointerLock();
+  if (IS_TOUCH) {
+    // 모바일: 전체 화면 + 가로 모드 시도 (실패해도 무시)
+    try {
+      const fs = document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+      if (fs && fs.catch) fs.catch(() => {});
+      if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+    } catch (e) { /* 미지원 브라우저 */ }
+  }
+  tryLockPointer();
 });
 $('restart-btn').addEventListener('click', () => {
   score.blue = 0; score.red = 0;
@@ -971,6 +986,94 @@ $('restart-btn').addEventListener('click', () => {
   respawnPlayer();
   showCenterMsg('⚔️ 다시 한 판! ⚔️');
 });
+
+// ------------------------------------------------------------
+// 모바일 터치 컨트롤
+// ------------------------------------------------------------
+if (IS_TOUCH) {
+  document.body.classList.add('touch');
+  const moveZone = $('move-zone'), lookZone = $('look-zone');
+  const joyEl = $('joystick'), knobEl = $('joy-knob');
+  const JOY_R = 55;
+  let moveId = null, moveOrigin = null;
+  let lookId = null, lookLast = null;
+
+  moveZone.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (moveId !== null) return;
+    const t = e.changedTouches[0];
+    moveId = t.identifier;
+    moveOrigin = { x: t.clientX, y: t.clientY };
+    joyEl.style.display = 'block';
+    joyEl.style.left = (t.clientX - 60) + 'px';
+    joyEl.style.top = (t.clientY - 60) + 'px';
+    knobEl.style.transform = 'translate(0,0)';
+  }, { passive: false });
+
+  lookZone.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (lookId !== null) return;
+    const t = e.changedTouches[0];
+    lookId = t.identifier;
+    lookLast = { x: t.clientX, y: t.clientY };
+  }, { passive: false });
+
+  window.addEventListener('touchmove', e => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === moveId) {
+        const dx = t.clientX - moveOrigin.x, dy = t.clientY - moveOrigin.y;
+        const mag = Math.hypot(dx, dy);
+        const cl = Math.min(1, mag / JOY_R);
+        const nx = mag > 0 ? dx / mag * cl : 0, ny = mag > 0 ? dy / mag * cl : 0;
+        knobEl.style.transform = `translate(${nx * 40}px, ${ny * 40}px)`;
+        if (cl > 0.18) {
+          input.right = nx; input.fwd = -ny;
+          input.sprint = cl > 0.92; // 끝까지 밀면 달리기
+        } else { input.right = 0; input.fwd = 0; input.sprint = false; }
+      } else if (t.identifier === lookId && gameState === 'playing' && player.alive) {
+        const sens = 0.0045 * (player.zoomed ? 0.35 : 1);
+        player.yaw -= (t.clientX - lookLast.x) * sens;
+        player.pitch -= (t.clientY - lookLast.y) * sens;
+        player.pitch = Math.max(-Math.PI / 2 + 0.03, Math.min(Math.PI / 2 - 0.03, player.pitch));
+        lookLast = { x: t.clientX, y: t.clientY };
+      }
+    }
+  }, { passive: false });
+
+  const endTouch = e => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === moveId) {
+        moveId = null;
+        input.fwd = 0; input.right = 0; input.sprint = false;
+        joyEl.style.display = 'none';
+      } else if (t.identifier === lookId) lookId = null;
+    }
+  };
+  window.addEventListener('touchend', endTouch);
+  window.addEventListener('touchcancel', endTouch);
+
+  // 버튼들
+  const bindBtn = (id, onDown, onUp) => {
+    const el = $(id);
+    el.addEventListener('touchstart', e => {
+      e.preventDefault(); e.stopPropagation();
+      el.classList.add('pressed');
+      onDown();
+    }, { passive: false });
+    el.addEventListener('touchend', e => {
+      e.preventDefault();
+      el.classList.remove('pressed');
+      if (onUp) onUp();
+    }, { passive: false });
+  };
+  bindBtn('btn-fire', () => { audio(); if (gameState === 'playing') input.fire = true; },
+    () => { input.fire = false; stopBeam(); });
+  bindBtn('btn-jump', () => input.jump = true, () => input.jump = false);
+  bindBtn('btn-reload', () => startReload());
+  bindBtn('btn-aim', () => {
+    if (WEAPONS[player.weaponIdx].zoom && player.alive) setZoom(!player.zoomed);
+  });
+}
 
 // ------------------------------------------------------------
 // 플레이어 이동
