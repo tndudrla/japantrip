@@ -255,8 +255,10 @@ function addPlatform(x, y, z, w, d, color, opts) {
 
 function updatePlatBounds(p) {
   const c = p.mesh.position;
-  p.min.set(c.x - p.w / 2, c.y - p.h / 2, c.z - p.d / 2);
-  p.max.set(c.x + p.w / 2, c.y + p.h / 2, c.z + p.d / 2);
+  // 킬 브릭은 판정 박스를 보이는 것보다 작게 (억울한 죽음 방지)
+  const ix = p.kill ? 0.22 : 0, iy = p.kill ? 0.12 : 0;
+  p.min.set(c.x - p.w / 2 + ix, c.y - p.h / 2 + iy, c.z - p.d / 2 + ix);
+  p.max.set(c.x + p.w / 2 - ix, c.y + p.h / 2 - iy, c.z + p.d / 2 - ix);
 }
 
 function addSpinner(y, color) {
@@ -320,7 +322,8 @@ function generateTower() {
         : rand(0, Math.PI * 2);
       x = prevPos.x + Math.cos(h) * want;
       z = prevPos.z + Math.sin(h) * want;
-      if (Math.hypot(x, z) <= 11.5) found = true;
+      const rr = Math.hypot(x, z);
+      if (rr >= 2.2 && rr <= 11.5) found = true; // 회전 막대 축(중심) 근처는 피한다
     }
     if (!found) { // 전부 실패하면 타워 중심 쪽으로
       const toC = Math.atan2(-prevPos.z, -prevPos.x);
@@ -334,16 +337,15 @@ function generateTower() {
     prevR = half;
 
     if (roll < 0.14 && i > 3) {
-      // 움직이는 발판
-      const axis = Math.random() < 0.5 ? 'x' : 'z';
+      // 엘리베이터 발판: 기준 높이에서 아래로 내려갔다 올라온다 (이웃을 휩쓸지 않음)
       addPlatform(x, y, z, w, d, 0xdddddd, {
-        move: { axis, origin: axis === 'x' ? x : z, amp: rand(2.5, 4), speed: rand(0.8, 1.4), phase: rand(0, 6.28) },
+        move: { axis: 'y', origin: y, amp: rand(1.5, 2.2), speed: rand(0.8, 1.2), phase: rand(0, 6.28) },
       });
     } else {
       const plat = addPlatform(x, y, z, w, d, sectionColor);
       // 킬 브릭을 옆에 붙이기
       if (roll > 0.72 && i > 2) {
-        const side = pick([[w / 2 + 1.1, 0], [-w / 2 - 1.1, 0], [0, d / 2 + 1.1], [0, -d / 2 - 1.1]]);
+        const side = pick([[w / 2 + 1.5, 0], [-w / 2 - 1.5, 0], [0, d / 2 + 1.5], [0, -d / 2 - 1.5]]);
         const kb = addPlatform(x + side[0], y, z + side[1], 2.2, 2.2, KILL_COLOR, { kill: true });
         kb.sideKillParent = plat;
       }
@@ -357,6 +359,22 @@ function generateTower() {
     if (i > 5 && i % 9 === 0) addSpinner(y + 1.2, sectionColor);
 
     prevPos.set(x, y, z);
+  }
+
+  // 엘리베이터가 내려가는 경로 근처에 다른 발판이 있으면 고정 발판으로 전환
+  for (const m of platforms) {
+    if (!m.move) continue;
+    for (const q of platforms) {
+      if (q === m) continue;
+      const qy = q.mesh.position.y;
+      if (qy > m.move.origin + 3.5 || qy < m.move.origin - m.move.amp - 3.5) continue;
+      const gx = Math.max(0, Math.max(m.min.x - q.max.x, q.min.x - m.max.x));
+      const gz = Math.max(0, Math.max(m.min.z - q.max.z, q.min.z - m.max.z));
+      if (Math.max(gx, gz) < 0.7 && Math.hypot(gx, gz) < 0.7) {
+        m.move = null; m.mesh.material.color.setHex(0x9aa2c8);
+        break;
+      }
+    }
   }
 
   // 다른 발판의 착지 경로를 막는 킬 브릭 제거
@@ -575,8 +593,13 @@ function physicsStep(dt, time) {
   for (const p of platforms) {
     if (!p.move) continue;
     p.prev.copy(p.mesh.position);
-    const v = p.move.origin + Math.sin(time * p.move.speed + p.move.phase) * p.move.amp;
-    if (p.move.axis === 'x') p.mesh.position.x = v; else p.mesh.position.z = v;
+    if (p.move.axis === 'y') {
+      // 기준 높이 아래로만 왕복 (위 발판과 끼임 방지)
+      p.mesh.position.y = p.move.origin - (0.5 + 0.5 * Math.sin(time * p.move.speed + p.move.phase)) * p.move.amp;
+    } else {
+      const v = p.move.origin + Math.sin(time * p.move.speed + p.move.phase) * p.move.amp;
+      if (p.move.axis === 'x') p.mesh.position.x = v; else p.mesh.position.z = v;
+    }
     updatePlatBounds(p);
   }
   // 회전 막대 갱신
@@ -589,6 +612,7 @@ function physicsStep(dt, time) {
     const gp = player.groundPlat;
     player.pos.x += gp.mesh.position.x - gp.prev.x;
     player.pos.z += gp.mesh.position.z - gp.prev.z;
+    player.pos.y += gp.mesh.position.y - gp.prev.y; // 엘리베이터에 붙어서 이동
   }
 
   // 이동 입력 (카메라 기준)
@@ -632,9 +656,9 @@ function physicsStep(dt, time) {
     if (p.kill) { respawn('빨간 블록에 닿았다! 🟥'); return; }
     if (player.vel.y <= 0 && _min.y < p.max.y && player.pos.y > p.max.y) {
       player.pos.y = p.max.y + PLAYER_HY;
+      if (wasAir && player.vel.y < -8) sfx.land();
       player.vel.y = 0;
       player.grounded = true; player.groundPlat = p;
-      if (wasAir) sfx.land();
     } else if (player.vel.y > 0 && _max.y > p.min.y && player.pos.y < p.min.y) {
       player.pos.y = p.min.y - PLAYER_HY;
       player.vel.y = 0;
@@ -679,11 +703,11 @@ function physicsStep(dt, time) {
   // 회전 막대 충돌 (막대 로컬 좌표로 변환해서 검사)
   for (const s of spinners) {
     const dy = Math.abs(player.pos.y - s.y);
-    if (dy > PLAYER_HY + 0.6) continue;
+    if (dy > PLAYER_HY + 0.15) continue; // 막대가 머리 위를 스치는 건 봐준다
     const a = -s.group.rotation.y;
     const lx = player.pos.x * Math.cos(a) - player.pos.z * Math.sin(a);
     const lz = player.pos.x * Math.sin(a) + player.pos.z * Math.cos(a);
-    if (Math.abs(lx) < s.len / 2 + PLAYER_HX && Math.abs(lz) < 0.35 + PLAYER_HZ) {
+    if (Math.abs(lx) < s.len / 2 + PLAYER_HX - 0.15 && Math.abs(lz) < 0.2 + PLAYER_HZ) {
       respawn('회전 막대에 맞았다! 💫'); return;
     }
   }
