@@ -341,13 +341,15 @@ function addKillFeed(killerName, killerTeam, victimName, victimTeam, weapon) {
   while (hud.killfeed.children.length > 5) hud.killfeed.lastChild.remove();
   setTimeout(() => item.remove(), 5000);
 }
-let hitmarkerTimer = null;
+let hitmarkerTimer = null, lastHitSfxT = 0;
 function showHitmarker(kill) {
   hud.hitmarker.classList.toggle('kill', !!kill);
   hud.hitmarker.style.opacity = 1;
   clearTimeout(hitmarkerTimer);
   hitmarkerTimer = setTimeout(() => hud.hitmarker.style.opacity = 0, 120);
-  SFX.hit();
+  // 빔처럼 매 프레임 명중하는 무기의 사운드 도배 방지
+  const now = performance.now();
+  if (now - lastHitSfxT > 90) { SFX.hit(); lastHitSfxT = now; }
 }
 
 // ------------------------------------------------------------
@@ -358,7 +360,7 @@ const WEAPONS = [
   { id: 'shotgun', name: '샷건',       mag: 6,   interval: 0.85, reload: 2.2, dmg: 7,  spread: 0.065, auto: false, range: 45, pellets: 8 },
   { id: 'sniper',  name: '저격소총',   mag: 5,   interval: 1.35, reload: 2.4, dmg: 90, spread: 0.0,  auto: false, range: 250, zoom: true },
   { id: 'rpg',     name: 'RPG',        mag: 1,   interval: 0.5,  reload: 2.6, dmg: 95, spread: 0.0,  auto: false, projectile: 'rocket' },
-  { id: 'ice',     name: '얼음 광선',  mag: 100, interval: 0.055, reload: 1.8, dmg: 1.3, spread: 0.01, auto: true, range: 38, beam: true },
+  { id: 'ice',     name: '얼음 광선',  mag: 100, interval: 0.055, reload: 1.8, dmg: 24, spread: 0.01, auto: true, range: 38, beam: true }, // dmg는 초당(dps)
   { id: 'grenade', name: '수류탄',     mag: 1,   interval: 0.4,  reload: 1.7, dmg: 100, spread: 0.0, auto: false, projectile: 'grenade' },
 ];
 
@@ -673,6 +675,7 @@ function updateEffects(dt) {
 // ------------------------------------------------------------
 function applyDamage(ent, dmg, attacker, isPlayer, weaponLabel) {
   if (dmg <= 0) return;
+  if (!isPlayer && ent.frozenT > 0) dmg *= 1.3; // 얼어있는 적은 추가 피해 (빙결 콤보)
   const wasAlive = ent.hp > 0;
   ent.hp -= dmg;
   if (isPlayer) {
@@ -803,7 +806,11 @@ function hitscan(origin, dir, range, dmg, attacker, opts = {}) {
     applyDamage(bestEnt, final, attacker, bestEnt === player, opts.label || '🔫');
     if (opts.freeze && bestEnt !== player) {
       bestEnt.freeze = Math.min(1.4, bestEnt.freeze + opts.freeze);
-      if (bestEnt.freeze >= 1.2 && bestEnt.frozenT <= 0) { bestEnt.frozenT = 2.5; SFX.freeze(); }
+      if (bestEnt.freeze >= 1.0 && bestEnt.frozenT <= 0) {
+        bestEnt.frozenT = 2.5;
+        SFX.freeze();
+        if (attacker === player) showCenterMsg(`❄️ <span style="color:#9fdcff">${bestEnt.name}</span> 빙결!`, 1200);
+      }
     }
   } else if (bestDist < range) {
     spawnParticles(end, 0xcccccc, 3, 3, 0.35, 0.08);
@@ -832,30 +839,32 @@ function getAimDir(spread) {
 function tryFire(dt) {
   const w = WEAPONS[player.weaponIdx];
   if (!player.alive || player.reloading > 0) return;
-  if (player.fireCooldown > 0) return;
   if (!input.fire) return;
-  if (player.ammo[player.weaponIdx] < (w.beam ? dt * 25 : 1)) {
+  if (player.ammo[player.weaponIdx] < (w.beam ? 0.5 : 1)) {
     startReload();
     return;
   }
-  const origin = camera.position.clone();
-  player.weaponLabel = w.id === 'rpg' ? '🚀' : w.id === 'grenade' ? '💣' : w.id === 'ice' ? '❄️' : '🔫';
 
   if (w.beam) {
-    // 얼음 광선: 지속 빔
+    // 얼음 광선: 쿨다운 틱이 아니라 매 프레임 dt 비례로 처리 (프레임레이트 무관하게 동일한 위력)
+    player.weaponLabel = '❄️';
     beamActive = true;
-    player.ammo[player.weaponIdx] -= dt * 25;
-    player.fireCooldown = w.interval;
+    player.ammo[player.weaponIdx] -= 8 * dt;
+    const origin0 = camera.position.clone();
     const dir = getAimDir(w.spread);
-    const dist = raycastWorld(origin, dir, w.range);
-    const end = origin.clone().addScaledVector(dir, dist);
-    spawnBeamSegment(origin.clone().addScaledVector(dir, 0.5).add(new THREE.Vector3(0, -0.15, 0)), end);
-    hitscan(origin, dir, w.range, w.dmg, player, { noTracer: true, freeze: dt * 1.15, label: '❄️' });
-    if (Math.random() < 0.3) SFX.ice();
-    if (Math.random() < 0.5) spawnParticles(end, 0xbfe8ff, 1, 2, 0.4, 0.09, false);
+    const dist = raycastWorld(origin0, dir, w.range);
+    const end = origin0.clone().addScaledVector(dir, dist);
+    spawnBeamSegment(origin0.clone().addScaledVector(dir, 0.5).add(new THREE.Vector3(0, -0.15, 0)), end);
+    hitscan(origin0, dir, w.range, w.dmg * dt, player, { noTracer: true, freeze: 2.4 * dt, label: '❄️' });
+    if (Math.random() < dt * 6) SFX.ice();
+    if (Math.random() < dt * 10) spawnParticles(end, 0xbfe8ff, 1, 2, 0.4, 0.09, false);
     updateWeaponHUD();
     return;
   }
+
+  if (player.fireCooldown > 0) return;
+  const origin = camera.position.clone();
+  player.weaponLabel = w.id === 'rpg' ? '🚀' : w.id === 'grenade' ? '💣' : '🔫';
   beamActive = false;
   player.ammo[player.weaponIdx]--;
   player.fireCooldown = w.interval;
@@ -1316,7 +1325,7 @@ requestAnimationFrame(loop);
 
 // 테스트용 디버그 훅
 window.__game = {
-  player, bots, score,
+  player, bots, score, input,
   damageBot: (i, d) => applyDamage(bots[i], d, player, false, '🔫'),
   damagePlayer: d => applyDamage(player, d, bots.find(b => b.team === 'red'), true, '🔫'),
 };
