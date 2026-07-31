@@ -302,26 +302,36 @@ function generateTower() {
   let dir = Math.random() < 0.5 ? 1 : -1;
   let prevPos = new THREE.Vector3(0, 0, 0);
 
+  let prevR = 2; // 이전 발판의 평균 반폭
   for (let i = 0; i < NUM; i++) {
     if (Math.random() < 0.12) dir *= -1;
     angle += rand(0.3, 0.55) * dir;
-    radius = Math.max(4.5, Math.min(11.5, radius + rand(-2.5, 2.5)));
-    y += rand(2.7, 3.4);
+    y += rand(2.2, 2.8);
 
-    let x = Math.cos(angle) * radius;
-    let z = Math.sin(angle) * radius;
-    // 이전 발판과의 수평 거리를 점프 가능 범위로 제한
-    const dx = x - prevPos.x, dz = z - prevPos.z;
-    const dist = Math.hypot(dx, dz);
-    const maxGap = 6.2, minGap = 3.2;
-    if (dist > maxGap || dist < minGap) {
-      const k = (dist < minGap ? minGap : maxGap) / (dist || 1);
-      x = prevPos.x + dx * k; z = prevPos.z + dz * k;
+    const w = rand(3, 4.6), d = rand(3, 4.6);
+    const half = (w + d) / 4;
+    // 가장자리 사이 간격이 1.0~2.4가 되도록 중심 거리 결정 (겹침 방지 + 점프 가능)
+    const want = prevR + half + rand(1.0, 2.4);
+    // 나선 진행 방향을 우선 시도, 타워 반경을 벗어나면 다른 방향 탐색
+    let x = 0, z = 0, found = false;
+    for (let att = 0; att < 24 && !found; att++) {
+      const h = att === 0
+        ? Math.atan2(Math.sin(angle) * radius - prevPos.z, Math.cos(angle) * radius - prevPos.x)
+        : rand(0, Math.PI * 2);
+      x = prevPos.x + Math.cos(h) * want;
+      z = prevPos.z + Math.sin(h) * want;
+      if (Math.hypot(x, z) <= 11.5) found = true;
     }
+    if (!found) { // 전부 실패하면 타워 중심 쪽으로
+      const toC = Math.atan2(-prevPos.z, -prevPos.x);
+      x = prevPos.x + Math.cos(toC) * want;
+      z = prevPos.z + Math.sin(toC) * want;
+    }
+    radius = Math.hypot(x, z);
 
     const sectionColor = SECTION_COLORS[Math.floor(y / 26) % SECTION_COLORS.length];
-    const w = rand(3, 4.6), d = rand(3, 4.6);
     const roll = Math.random();
+    prevR = half;
 
     if (roll < 0.14 && i > 3) {
       // 움직이는 발판
@@ -330,11 +340,12 @@ function generateTower() {
         move: { axis, origin: axis === 'x' ? x : z, amp: rand(2.5, 4), speed: rand(0.8, 1.4), phase: rand(0, 6.28) },
       });
     } else {
-      addPlatform(x, y, z, w, d, sectionColor);
+      const plat = addPlatform(x, y, z, w, d, sectionColor);
       // 킬 브릭을 옆에 붙이기
       if (roll > 0.72 && i > 2) {
         const side = pick([[w / 2 + 1.1, 0], [-w / 2 - 1.1, 0], [0, d / 2 + 1.1], [0, -d / 2 - 1.1]]);
-        addPlatform(x + side[0], y, z + side[1], 2.2, 2.2, KILL_COLOR, { kill: true });
+        const kb = addPlatform(x + side[0], y, z + side[1], 2.2, 2.2, KILL_COLOR, { kill: true });
+        kb.sideKillParent = plat;
       }
       // 발판 위 장애물 킬 브릭 (뛰어넘어야 함)
       if (roll > 0.44 && roll < 0.56 && i > 4) {
@@ -347,6 +358,20 @@ function generateTower() {
 
     prevPos.set(x, y, z);
   }
+
+  // 다른 발판의 착지 경로를 막는 킬 브릭 제거
+  platforms = platforms.filter(kb => {
+    if (!kb.sideKillParent) return true;
+    for (const q of platforms) {
+      if (q === kb || q.kill || q === kb.sideKillParent) continue;
+      const dy = Math.abs(q.mesh.position.y - kb.mesh.position.y);
+      if (dy > 3.5) continue;
+      const gx = Math.max(0, Math.max(kb.min.x - q.max.x, q.min.x - kb.max.x));
+      const gz = Math.max(0, Math.max(kb.min.z - q.max.z, q.min.z - kb.max.z));
+      if (Math.hypot(gx, gz) < 1.0) { towerGroup.remove(kb.mesh); return false; }
+    }
+    return true;
+  });
 
   // 꼭대기 골인 발판
   y += 3.2;
@@ -457,11 +482,11 @@ canvas.addEventListener('touchcancel', touchEnd);
 jumpBtn.addEventListener('touchstart', e => { jumpQueued = true; e.preventDefault(); }, { passive: false });
 
 // ---------- 게임 상태 ----------
-const GRAVITY = 55, WALK = 13.5, JUMP_V = 21;
+const GRAVITY = 48, WALK = 13.5, JUMP_V = 22; // 점프 높이 약 5.0 (발판 높이차 2.3~3.0보다 여유있게)
 let running = false;
 let startTime = 0, elapsed = 0;
 let deaths = 0;
-let coyote = 0;
+let coyote = 0, jumpBuf = 0;
 let winShown = false;
 
 const timerEl = document.getElementById('timer');
@@ -583,14 +608,15 @@ function physicsStep(dt, time) {
   player.vel.x = mx;
   player.vel.z = mz;
 
-  // 점프 (코요테 타임 포함)
+  // 점프 (코요테 타임 + 선입력 버퍼)
   if (player.grounded) coyote = 0.12; else coyote -= dt;
-  if (jumpQueued && coyote > 0) {
+  if (jumpQueued) { jumpBuf = 0.15; jumpQueued = false; }
+  jumpBuf -= dt;
+  if (jumpBuf > 0 && coyote > 0) {
     player.vel.y = JUMP_V;
-    player.grounded = false; player.groundPlat = null; coyote = 0;
+    player.grounded = false; player.groundPlat = null; coyote = 0; jumpBuf = 0;
     sfx.jump();
   }
-  jumpQueued = false;
 
   player.vel.y -= GRAVITY * dt;
   if (player.vel.y < -50) player.vel.y = -50;
@@ -616,12 +642,26 @@ function physicsStep(dt, time) {
     playerBounds(player.pos);
   }
 
+  // 턱 걸침 보정: 발이 발판 윗면 근처까지 왔으면 밀어내지 않고 위로 올려준다
+  function ledgeAssist(p) {
+    const feet = player.pos.y - PLAYER_HY;
+    if (player.vel.y <= 0.5 && p.max.y - feet > 0 && p.max.y - feet < 0.6) {
+      player.pos.y = p.max.y + PLAYER_HY;
+      player.vel.y = 0;
+      player.grounded = true; player.groundPlat = p;
+      playerBounds(player.pos);
+      return true;
+    }
+    return false;
+  }
+
   // X축
   player.pos.x += player.vel.x * dt;
   playerBounds(player.pos);
   for (const p of platforms) {
     if (!aabbOverlap(_min, _max, p)) continue;
     if (p.kill) { respawn('빨간 블록에 닿았다! 🟥'); return; }
+    if (ledgeAssist(p)) continue;
     player.pos.x = player.vel.x > 0 ? p.min.x - PLAYER_HX : p.max.x + PLAYER_HX;
     playerBounds(player.pos);
   }
@@ -631,6 +671,7 @@ function physicsStep(dt, time) {
   for (const p of platforms) {
     if (!aabbOverlap(_min, _max, p)) continue;
     if (p.kill) { respawn('빨간 블록에 닿았다! 🟥'); return; }
+    if (ledgeAssist(p)) continue;
     player.pos.z = player.vel.z > 0 ? p.min.z - PLAYER_HZ : p.max.z + PLAYER_HZ;
     playerBounds(player.pos);
   }
