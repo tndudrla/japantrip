@@ -62,6 +62,29 @@
   #selectPanel h1 { text-shadow:0 3px 8px #000; }
   #selectBtns { display:flex; gap:60px; justify-content:center; margin-top:10px; }
   #btnM { background:#3498db; } #btnF { background:#e91e63; }
+  #btnShop { background:#8e44ad; margin-top:14px; font-size:16px; padding:10px 24px; }
+
+  /* ---------- 꾸미기 상점 ---------- */
+  #shopPanel { left:auto; right:2%; top:50%; transform:translateY(-50%);
+    width:min(430px, 74vw); max-height:88vh; overflow-y:auto; text-align:left; padding:18px 20px; }
+  #shopPanel h1 { font-size:24px; text-align:center; margin-bottom:2px; }
+  #shopCoins { text-align:center; font-size:18px; margin:4px 0 8px; }
+  #shopTabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .shopTab { padding:7px 12px; border-radius:8px; border:none; background:#2c3e60;
+    color:#fff; cursor:pointer; font-size:14px; }
+  .shopTab.active { background:#f1c40f; color:#222; font-weight:bold; }
+  #shopGrid { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; align-items:center; }
+  .shopItem { padding:9px 12px; border-radius:10px; border:2px solid transparent;
+    background:#22304f; color:#fff; cursor:pointer; font-size:14px; text-align:center; }
+  .shopItem .price { color:#f1c40f; font-size:12px; display:block; }
+  .shopItem.equipped { border-color:#2ecc71; background:#1d3a2a; }
+  .swatch { width:46px; height:46px; border-radius:10px; border:2px solid rgba(255,255,255,0.25);
+    cursor:pointer; position:relative; color:#fff; font-size:11px; display:flex;
+    align-items:center; justify-content:center; text-shadow:0 1px 2px #000; }
+  .swatch.equipped { border-color:#2ecc71; border-width:3px; }
+  .swatch .price { position:absolute; bottom:1px; right:3px; font-size:10px; color:#ffe98a; }
+  #shopDone { width:100%; background:#27ae60; margin-top:4px; }
+  .miniShopBtn { background:#8e44ad; font-size:15px; padding:10px 20px; margin-top:10px; margin-right:8px; }
 
   #titleWrap { position:fixed; top:6%; width:100%; text-align:center; color:#fff;
     pointer-events:none; display:none; }
@@ -128,6 +151,15 @@
     <button id="btnM" class="bigBtn">남자</button>
     <button id="btnF" class="bigBtn">여자</button>
   </div>
+  <div style="text-align:center"><button id="btnShop" class="bigBtn">🎨 꾸미기 상점</button></div>
+</div>
+
+<div id="shopPanel" class="panel">
+  <h1>🎨 꾸미기 상점</h1>
+  <p id="shopCoins" class="gold"></p>
+  <div id="shopTabs"></div>
+  <div id="shopGrid"></div>
+  <button id="shopDone" class="bigBtn">완료</button>
 </div>
 
 <div id="resultPanel" class="panel">
@@ -135,6 +167,7 @@
   <p id="resultKills"></p>
   <p id="resultPoints"></p>
   <p id="resultNext"></p>
+  <button id="resultShopBtn" class="bigBtn miniShopBtn">🎨 꾸미기</button>
   <button id="resultBtn" class="bigBtn"></button>
 </div>
 
@@ -142,6 +175,7 @@
   <h1 style="color:#e74c3c">쓰러졌다...</h1>
   <p>포인트는 그대로! 다시 도전해보세요.</p>
   <p id="gameoverPoints" class="gold"></p>
+  <button id="gameoverShopBtn" class="bigBtn miniShopBtn">🎨 꾸미기</button>
   <button id="gameoverBtn" class="bigBtn" style="background:#2980b9">다시 도전 🔄</button>
 </div>
 
@@ -212,6 +246,74 @@ const SPEED_COST = 10, MAX_SPEED_LEVEL = 12;
 const ROAD_W = 34;
 const EYE_H = 4.6;
 
+// ===================== 꾸미기 아이템 =====================
+const COLOR_PALETTE = [0x3b2b20, 0x111111, 0xc0392b, 0xf1c40f, 0x8e44ad,
+                       0x2ecc71, 0x3498db, 0xff8fb3, 0xffffff, 0xe67e22];
+const SHOP_CATS = [
+  { key:"hair", name:"헤어", items:[
+    { id:null,     name:"기본",     cost:0 },
+    { id:"pony",   name:"포니테일", cost:20 },
+    { id:"twin",   name:"양갈래",   cost:20 },
+    { id:"spiky",  name:"뾰족머리", cost:25 },
+    { id:"mohawk", name:"모히칸",   cost:30 },
+    { id:"bald",   name:"대머리",   cost:5 },
+  ]},
+  { key:"hairColor",  name:"머리색", colors:true },
+  { key:"shirtColor", name:"옷",     colors:true },
+  { key:"pantsColor", name:"바지",   colors:true },
+  { key:"face", name:"얼굴", items:[
+    { id:"smile", name:"🙂 미소",     cost:0 },
+    { id:"wink",  name:"😉 윙크",     cost:15 },
+    { id:"angry", name:"😠 화남",     cost:15 },
+    { id:"wow",   name:"😲 놀람",     cost:15 },
+    { id:"cool",  name:"😎 선글라스", cost:25 },
+  ]},
+  { key:"hat", name:"모자", items:[
+    { id:"none",  name:"없음",      cost:0 },
+    { id:"band",  name:"⬜ 머리띠", cost:20 },
+    { id:"cap",   name:"🧢 캡모자", cost:30 },
+    { id:"crown", name:"👑 왕관",   cost:50 },
+  ]},
+];
+const COLOR_COST = 10;
+
+let custom = {
+  owned: { hair:[], face:["smile"], hat:["none"], hairColor:[], shirtColor:[], pantsColor:[] },
+  eq:    { hair:null, face:"smile", hat:"none", hairColor:null, shirtColor:null, pantsColor:null },
+};
+
+function saveProgress() {
+  try {
+    localStorage.setItem("battleRace3d", JSON.stringify({ points: game.points, custom }));
+  } catch (e) { /* 저장 실패는 무시 */ }
+}
+function loadProgress() {
+  try {
+    const d = JSON.parse(localStorage.getItem("battleRace3d"));
+    if (!d) return;
+    if (typeof d.points === "number") game.points = d.points;
+    if (d.custom && d.custom.owned && d.custom.eq) {
+      for (const k in custom.owned) if (Array.isArray(d.custom.owned[k])) custom.owned[k] = d.custom.owned[k];
+      for (const k in custom.eq) if (k in d.custom.eq) custom.eq[k] = d.custom.eq[k];
+    }
+  } catch (e) { /* 불러오기 실패는 무시 */ }
+}
+
+// 성별 + 장착 아이템을 합친 플레이어 겉모습
+function playerStyleFor(female) {
+  const o = outfit();
+  return {
+    female,
+    hairStyle: custom.eq.hair,
+    hair:  custom.eq.hairColor  != null ? COLOR_PALETTE[custom.eq.hairColor]  : (female ? o.hairF : o.hairM),
+    shirt: custom.eq.shirtColor != null ? COLOR_PALETTE[custom.eq.shirtColor] : o.shirt,
+    pants: custom.eq.pantsColor != null ? COLOR_PALETTE[custom.eq.pantsColor] : o.pants,
+    face: custom.eq.face,
+    hat: custom.eq.hat,
+  };
+}
+function playerStyle() { return playerStyleFor(game.gender === "F"); }
+
 // ===================== 게임 상태 =====================
 const game = {
   state: "select",
@@ -269,21 +371,45 @@ let selectChars = null;
 // ===================== 캐릭터(로블록스 스타일) =====================
 function lambert(color) { return new THREE.MeshLambertMaterial({ color }); }
 
-function makeFaceTexture(skinHex) {
+function makeFaceTexture(skinHex, face) {
   const c = document.createElement("canvas");
   c.width = c.height = 128;
   const g = c.getContext("2d");
   g.fillStyle = "#" + skinHex.toString(16).padStart(6, "0");
   g.fillRect(0, 0, 128, 128);
   g.fillStyle = "#1a1a1a";
-  // 눈
-  g.beginPath(); g.ellipse(42, 52, 9, 13, 0, 0, Math.PI * 2); g.fill();
-  g.beginPath(); g.ellipse(86, 52, 9, 13, 0, 0, Math.PI * 2); g.fill();
-  // 미소
   g.strokeStyle = "#1a1a1a"; g.lineWidth = 6; g.lineCap = "round";
-  g.beginPath(); g.arc(64, 74, 22, Math.PI * 0.15, Math.PI * 0.85); g.stroke();
-  const tex = new THREE.CanvasTexture(c);
-  return tex;
+  const eye = (x, y, rx, ry) => { g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); g.fill(); };
+  const smile = () => { g.beginPath(); g.arc(64, 74, 22, Math.PI * 0.15, Math.PI * 0.85); g.stroke(); };
+  switch (face || "smile") {
+    case "wink":
+      eye(42, 52, 9, 13);
+      g.beginPath(); g.arc(86, 52, 11, Math.PI * 1.15, Math.PI * 1.85); g.stroke();   // 감은 눈
+      smile();
+      break;
+    case "angry":
+      eye(42, 56, 9, 11); eye(86, 56, 9, 11);
+      g.beginPath(); g.moveTo(28, 34); g.lineTo(54, 44); g.stroke();                   // 눈썹
+      g.beginPath(); g.moveTo(100, 34); g.lineTo(74, 44); g.stroke();
+      g.beginPath(); g.arc(64, 98, 20, Math.PI * 1.2, Math.PI * 1.8); g.stroke();      // 찡그림
+      break;
+    case "wow":
+      eye(42, 52, 11, 14); eye(86, 52, 11, 14);
+      g.beginPath(); g.ellipse(64, 88, 11, 14, 0, 0, Math.PI * 2); g.stroke();         // O 입
+      break;
+    case "cool":
+      g.fillRect(20, 40, 88, 24);                                                       // 선글라스
+      g.fillRect(14, 44, 8, 8); g.fillRect(106, 44, 8, 8);
+      g.fillStyle = "rgba(255,255,255,0.35)";
+      g.fillRect(28, 44, 14, 6); g.fillRect(74, 44, 14, 6);
+      g.fillStyle = "#1a1a1a";
+      g.beginPath(); g.moveTo(46, 84) ; g.lineTo(84, 84); g.stroke();                  // 무표정 입
+      break;
+    default:
+      eye(42, 52, 9, 13); eye(86, 52, 9, 13);
+      smile();
+  }
+  return new THREE.CanvasTexture(c);
 }
 
 // 캐릭터는 -z 방향을 바라보도록 생성 (달리는 방향)
@@ -331,7 +457,7 @@ function buildCharacter(cfg) {
   parts.sword = sword;
 
   // 머리 (얼굴은 -z면)
-  const faceTex = makeFaceTexture(skin);
+  const faceTex = makeFaceTexture(skin, cfg.face);
   const headMats = [
     lambert(skin), lambert(skin), lambert(skin),
     lambert(skin),
@@ -343,20 +469,65 @@ function buildCharacter(cfg) {
   group.add(head);
   parts.head = head;
 
-  // 머리카락
+  // 머리카락 (스타일 선택 가능)
   const hairMat = lambert(cfg.hair);
-  const cap = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.55, 1.55), hairMat);
-  cap.position.set(0, 5.35, 0.05);
-  group.add(cap);
-  const back = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.9, 0.4), hairMat);
-  back.position.set(0, 4.95, 0.75);
-  group.add(back);
-  if (cfg.female) {
+  const hs = cfg.hairStyle || (cfg.female ? "pony" : "basic");
+  if (hs !== "bald" && hs !== "mohawk") {
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.55, 1.55), hairMat);
+    cap.position.set(0, 5.35, 0.05);
+    group.add(cap);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.9, 0.4), hairMat);
+    back.position.set(0, 4.95, 0.75);
+    group.add(back);
+  }
+  if (hs === "pony") {
     const tail = new THREE.Mesh(new THREE.BoxGeometry(0.55, 1.7, 0.5), hairMat);
     tail.position.set(0, 4.2, 1.05);
     tail.rotation.x = 0.25;
     group.add(tail);
-    parts.tail = tail;
+  } else if (hs === "twin") {
+    for (const s of [-1, 1]) {
+      const tail = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1.5, 0.45), hairMat);
+      tail.position.set(s * 0.85, 4.35, 0.55);
+      tail.rotation.z = -s * 0.18;
+      group.add(tail);
+    }
+  } else if (hs === "spiky") {
+    for (const [sx, sz] of [[-0.42, -0.1], [0, 0.25], [0.42, -0.1], [0, -0.4]]) {
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.85, 4), hairMat);
+      spike.position.set(sx, 5.85, sz);
+      group.add(spike);
+    }
+  } else if (hs === "mohawk") {
+    const hawk = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.75, 1.75), hairMat);
+    hawk.position.set(0, 5.75, 0.05);
+    group.add(hawk);
+  }
+
+  // 모자
+  if (cfg.hat && cfg.hat !== "none") {
+    if (cfg.hat === "cap") {
+      const capTop = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.5, 1.65), lambert(0xd94040));
+      capTop.position.set(0, 5.65, 0.05);
+      group.add(capTop);
+      const brim = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.12, 0.75), lambert(0xd94040));
+      brim.position.set(0, 5.45, -1.0);
+      group.add(brim);
+    } else if (cfg.hat === "crown") {
+      const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.9, 0.45, 8), lambert(0xf1c40f));
+      ring.position.set(0, 5.85, 0);
+      group.add(ring);
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2;
+        const point = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.45, 4), lambert(0xf1c40f));
+        point.position.set(Math.cos(a) * 0.72, 6.2, Math.sin(a) * 0.72);
+        group.add(point);
+      }
+    } else if (cfg.hat === "band") {
+      const band = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.28, 1.72), lambert(0xffffff));
+      band.position.set(0, 5.15, 0);
+      group.add(band);
+    }
   }
 
   parts.all = [];
@@ -396,7 +567,7 @@ function animateRun(group, phase, speedFactor) {
 // ===================== 1인칭 뷰모델 =====================
 function buildViewmodel() {
   if (viewmodel) camera.remove(viewmodel);
-  const o = outfit();
+  const o = { shirt: playerStyle().shirt };
   const skin = 0xf5cba7;
   const vm = new THREE.Group();
 
@@ -760,10 +931,12 @@ function setupSelectScene() {
   floor.rotation.x = -Math.PI / 2;
   scene.add(floor);
 
-  const o = OUTFITS[0];
-  const male = buildCharacter({ shirt: 0x3498db, pants: o.pants, hair: o.hairM, female: false });
+  // 꾸민 아이템이 미리보기에도 반영됨 (셔츠 색만 성별 구분용으로 고정)
+  const mStyle = playerStyleFor(false), fStyle = playerStyleFor(true);
+  if (custom.eq.shirtColor == null) { mStyle.shirt = 0x3498db; fStyle.shirt = 0xe91e63; }
+  const male = buildCharacter(mStyle);
   male.position.set(-3.2, 0, 0);
-  const female = buildCharacter({ shirt: 0xe91e63, pants: o.pants, hair: o.hairF, female: true });
+  const female = buildCharacter(fStyle);
   female.position.set(3.2, 0, 0);
   scene.add(male); scene.add(female);
   for (const c of [male, female]) {
@@ -779,6 +952,110 @@ function setupSelectScene() {
   camera.rotation.x = -0.08;
 }
 
+// ===================== 꾸미기 상점 화면 =====================
+let shopChar = null;
+let shopTab = 0;
+let shopNext = "select";
+
+function setupShopScene() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a2a4a);
+  scene.fog = new THREE.Fog(0x1a2a4a, 20, 60);
+  buildLights(scene);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), lambert(0x24365a));
+  floor.rotation.x = -Math.PI / 2;
+  scene.add(floor);
+  const pod = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.6, 0.5, 24), lambert(0x38507e));
+  pod.position.set(2.8, 0.25, 0);
+  scene.add(pod);
+  shopChar = null;
+  rebuildShopChar();
+  camera.position.set(0, 4.6, -9.5);
+  camera.rotation.set(0, Math.PI, 0);
+  camera.rotation.x = -0.06;
+}
+function rebuildShopChar() {
+  if (shopChar) scene.remove(shopChar);
+  shopChar = buildCharacter(playerStyle());
+  shopChar.position.set(2.8, 0.5, 0);
+  scene.add(shopChar);
+}
+
+function ownedIn(cat, val) {
+  if (val === null) return true;
+  const it = cat.colors ? null : cat.items.find(i => i.id === val);
+  if (it && it.cost === 0) return true;
+  return custom.owned[cat.key].includes(val);
+}
+function shopClick(cat, val, cost) {
+  if (!ownedIn(cat, val)) {
+    if (game.points < cost) {
+      $("shopCoins").textContent = "💰 " + game.points + "P — 코인이 부족해요!";
+      return;
+    }
+    game.points -= cost;
+    custom.owned[cat.key].push(val);
+    sfx.buy();
+  }
+  custom.eq[cat.key] = val;
+  saveProgress();
+  renderShop();
+  rebuildShopChar();
+}
+function renderShop() {
+  $("shopCoins").textContent = "💰 보유 코인: " + game.points + "P";
+  const tabs = $("shopTabs");
+  tabs.innerHTML = "";
+  SHOP_CATS.forEach((cat, i) => {
+    const b = document.createElement("button");
+    b.className = "shopTab" + (i === shopTab ? " active" : "");
+    b.textContent = cat.name;
+    b.onclick = () => { shopTab = i; renderShop(); };
+    tabs.appendChild(b);
+  });
+  const grid = $("shopGrid");
+  grid.innerHTML = "";
+  const cat = SHOP_CATS[shopTab];
+  if (cat.colors) {
+    // '자동' = 레이스마다 바뀌는 기본 색
+    const auto = document.createElement("div");
+    auto.className = "swatch" + (custom.eq[cat.key] === null ? " equipped" : "");
+    auto.style.background = "linear-gradient(135deg,#e74c3c,#f1c40f,#2ecc71,#3498db)";
+    auto.textContent = "자동";
+    auto.onclick = () => shopClick(cat, null, 0);
+    grid.appendChild(auto);
+    COLOR_PALETTE.forEach((c, idx) => {
+      const sw = document.createElement("div");
+      sw.className = "swatch" + (custom.eq[cat.key] === idx ? " equipped" : "");
+      sw.style.background = "#" + c.toString(16).padStart(6, "0");
+      if (!custom.owned[cat.key].includes(idx)) {
+        const p = document.createElement("span");
+        p.className = "price";
+        p.textContent = COLOR_COST + "P";
+        sw.appendChild(p);
+      }
+      sw.onclick = () => shopClick(cat, idx, COLOR_COST);
+      grid.appendChild(sw);
+    });
+  } else {
+    for (const it of cat.items) {
+      const b = document.createElement("button");
+      b.className = "shopItem" + (custom.eq[cat.key] === it.id ? " equipped" : "");
+      const owned = ownedIn(cat, it.id);
+      b.innerHTML = it.name + (owned ? "" : '<span class="price">' + it.cost + "P</span>");
+      b.onclick = () => shopClick(cat, it.id, it.cost);
+      grid.appendChild(b);
+    }
+  }
+}
+function openShop(next) {
+  shopNext = next;
+  $("shopDone").textContent = next === "select" ? "완료 ✔" : "레이스 시작 ▶";
+  setupShopScene();
+  renderShop();
+  setState("shop");
+}
+
 // ===================== 상태/화면 전환 =====================
 const $ = id => document.getElementById(id);
 function setState(s) {
@@ -788,6 +1065,7 @@ function setState(s) {
   $("hud").style.display = (s === "race" || s === "countdown") ? "block" : "none";
   $("resultPanel").style.display = s === "result" ? "block" : "none";
   $("gameoverPanel").style.display = s === "gameover" ? "block" : "none";
+  $("shopPanel").style.display = s === "shop" ? "block" : "none";
   $("touchUI").style.display = (isTouch && (s === "race" || s === "countdown")) ? "block" : "none";
   if (s !== "race" && s !== "countdown" && document.exitPointerLock) document.exitPointerLock();
 }
@@ -871,6 +1149,7 @@ function buySpeed() {
   game.points -= SPEED_COST;
   game.speedLevel++;
   sfx.buy();
+  saveProgress();
   addFloat("속도 UP!", camera.position.clone().add(forwardVec().multiplyScalar(4)), "#2ecc71");
 }
 function buyWeapon() {
@@ -881,6 +1160,7 @@ function buyWeapon() {
   game.points -= cost;
   game.weaponLevel++;
   sfx.buy();
+  saveProgress();
   buildViewmodel();
   addFloat(weapon().name + " 획득!", camera.position.clone().add(forwardVec().multiplyScalar(4)), "#f1c40f");
 }
@@ -930,6 +1210,7 @@ function killEnemy(e) {
   sfx.kill();
   addFloat("+10P", new THREE.Vector3(e.x, 5, e.z), "#f1c40f");
   scatterParts(e);
+  saveProgress();
 }
 function hazardKillEnemy(e) {   // 장애물에 당함 — 포인트 없음
   e.alive = false;
@@ -981,6 +1262,7 @@ function hurtPlayer(dmg) {
     $("gameoverPoints").textContent = "보유 포인트: " + game.points + "P";
     setState("gameover");
     hideBig();
+    saveProgress();
   }
 }
 
@@ -997,6 +1279,15 @@ function update(dt) {
       animateRun(selectChars.male, game.time * 3, 0.25);
       animateRun(selectChars.female, game.time * 3 + 1, 0.25);
       selectChars.male.position.y = 0.5; selectChars.female.position.y = 0.5;
+    }
+    return;
+  }
+
+  if (game.state === "shop") {
+    if (shopChar) {
+      shopChar.rotation.y += dt * 0.9;
+      animateRun(shopChar, game.time * 3, 0.2);
+      shopChar.position.y = 0.5;
     }
     return;
   }
@@ -1216,6 +1507,7 @@ function finishRace() {
   }
   setState("result");
   hideBig();
+  saveProgress();
 }
 
 // ===================== 입력 =====================
@@ -1288,6 +1580,20 @@ $("resultBtn").addEventListener("click", () => {
   setupRace();
 });
 $("gameoverBtn").addEventListener("click", () => setupRace());
+
+// 꾸미기 상점 열기/닫기
+$("btnShop").addEventListener("click", () => openShop("select"));
+$("resultShopBtn").addEventListener("click", () => openShop(game.playerRank === 1 ? "nextRace" : "retry"));
+$("gameoverShopBtn").addEventListener("click", () => openShop("retry"));
+$("shopDone").addEventListener("click", () => {
+  if (shopNext === "select") {
+    setupSelectScene();
+    setState("select");
+  } else {
+    if (shopNext === "nextRace") game.raceIndex++;
+    setupRace();
+  }
+});
 
 // ---- 터치 조작 ----
 if (isTouch) {
@@ -1371,6 +1677,7 @@ if (isTouch) {
 }
 
 // ===================== 메인 루프 =====================
+loadProgress();
 setupSelectScene();
 setState("select");
 
